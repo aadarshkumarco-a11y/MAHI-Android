@@ -1,0 +1,38 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Outer glow ring -->
+    <path
+        android:pathData="M54,8 A46,46 0 1,1 53.99,8 z"
+        android:strokeWidth="2"
+        android:strokeColor="#37DCF2"
+        android:strokeAlpha="0.3"
+        android:fillColor="#00000000"/>
+    <!-- Inner circle -->
+    <path
+        android:pathData="M54,20 A34,34 0 1,1 53.99,20 z"
+        android:strokeWidth="1.5"
+        android:strokeColor="#37DCF2"
+        android:strokeAlpha="0.6"
+        android:fillColor="#0A0E17"/>
+    <!-- Core orb -->
+    <path
+        android:pathData="M54,30 A24,24 0 1,1 53.99,30 z"
+        android:fillColor="#37DCF2"
+        android:fillAlpha="0.15"/>
+    <!-- Center dot -->
+    <path
+        android:pathData="M54,46 A8,8 0 1,1 53.99,46 z"
+        android:fillColor="#37DCF2"
+        android:fillAlpha="0.8"/>
+    <!-- M letter -->
+    <path
+        android:pathData="M48,52 L48,60 L51,56 L54,60 L57,56 L60,60 L60,52"
+        android:strokeWidth="2"
+        android:strokeColor="#37DCF2"
+        android:fillColor="#00000000"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"/>
+</vector>
