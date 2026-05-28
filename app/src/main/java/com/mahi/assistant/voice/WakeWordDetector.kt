@@ -79,23 +79,23 @@ class WakeWordDetector(
         val builder = Porcupine.Builder()
             .setAccessKey(accessKey)
 
-        // Set the built-in keyword using Porcupine.Keyword enum (v2.2 API)
+        // Set the built-in keyword using Porcupine.BuiltInKeyword enum (v2.2 API)
         val porcupineKeyword = when (keyword.lowercase()) {
-            "jarvis" -> Porcupine.Keyword.JARVIS
-            "hey google" -> Porcupine.Keyword.HEY_GOOGLE
-            "alexa" -> Porcupine.Keyword.ALEXA
-            "hey siri" -> Porcupine.Keyword.HEY_SIRI
-            "ok google" -> Porcupine.Keyword.OK_GOOGLE
-            "computer" -> Porcupine.Keyword.COMPUTER
-            "terminator" -> Porcupine.Keyword.TERMINATOR
-            "grapefruit" -> Porcupine.Keyword.GRAPEFRUIT
-            "grasshopper" -> Porcupine.Keyword.GRASSHOPPER
-            "bumblebee" -> Porcupine.Keyword.BUMBLEBEE
-            "americano" -> Porcupine.Keyword.AMERICANO
-            "blueberry" -> Porcupine.Keyword.BLUEBERRY
-            "picovoice" -> Porcupine.Keyword.PICOVOICE
-            "porcupine" -> Porcupine.Keyword.PORCUPINE
-            else -> Porcupine.Keyword.PORCUPINE
+            "jarvis" -> Porcupine.BuiltInKeyword.JARVIS
+            "hey google" -> Porcupine.BuiltInKeyword.HEY_GOOGLE
+            "alexa" -> Porcupine.BuiltInKeyword.ALEXA
+            "hey siri" -> Porcupine.BuiltInKeyword.HEY_SIRI
+            "ok google" -> Porcupine.BuiltInKeyword.OK_GOOGLE
+            "computer" -> Porcupine.BuiltInKeyword.COMPUTER
+            "terminator" -> Porcupine.BuiltInKeyword.TERMINATOR
+            "grapefruit" -> Porcupine.BuiltInKeyword.GRAPEFRUIT
+            "grasshopper" -> Porcupine.BuiltInKeyword.GRASSHOPPER
+            "bumblebee" -> Porcupine.BuiltInKeyword.BUMBLEBEE
+            "americano" -> Porcupine.BuiltInKeyword.AMERICANO
+            "blueberry" -> Porcupine.BuiltInKeyword.BLUEBERRY
+            "picovoice" -> Porcupine.BuiltInKeyword.PICOVOICE
+            "porcupine" -> Porcupine.BuiltInKeyword.PORCUPINE
+            else -> Porcupine.BuiltInKeyword.PORCUPINE
         }
         builder.setKeyword(porcupineKeyword)
 
