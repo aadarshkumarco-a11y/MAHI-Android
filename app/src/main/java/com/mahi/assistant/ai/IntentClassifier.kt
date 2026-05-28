@@ -523,7 +523,7 @@ class IntentClassifier(
                 }
 
                 val params = mutableMapOf<String, String>()
-                val paramPattern = Regex(""?"(\w+)"\s*:\s*"([^"]+)"""")
+                val paramPattern = Regex("""\"(\w+)\"\s*:\s*\"([^\"]+)\"""")
                 paramPattern.findAll(json).forEach { match ->
                     val key = match.groupValues[1]
                     val value = match.groupValues[2]
