@@ -39,11 +39,13 @@ fun MahiNavHost(
         navController = navController,
         startDestination = MahiRoutes.HOME,
         modifier = modifier,
-        enterTransition = { fadeIn(animationSpec = androidx.compose.animation.core.tween(300)) },
-        exitTransition = { fadeOut(animationSpec = androidx.compose.animation.core.tween(200)) },
     ) {
         // ── Home ────────────────────────────────────────────────
-        composable(MahiRoutes.HOME) {
+        composable(
+            MahiRoutes.HOME,
+            enterTransition = { fadeIn(animationSpec = androidx.compose.animation.core.tween(300)) },
+            exitTransition = { fadeOut(animationSpec = androidx.compose.animation.core.tween(200)) },
+        ) {
             HomeScreen(
                 onNavigateToChat = {
                     navController.navigate(MahiRoutes.CHAT)

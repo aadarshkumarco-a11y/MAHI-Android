@@ -546,37 +546,29 @@ class DeviceControlManager @Inject constructor(
         return try {
             val currentState = powerManager.isPowerSaveMode
             val newState = !currentState
-            powerManager.isPowerSaveMode = newState
+            // Cannot set isPowerSaveMode directly — open settings instead
+            val intent = Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
             updateState("battery_saver", DeviceFeatureState(isOn = newState))
             Result.success(newState)
         } catch (e: Exception) {
-            try {
-                val intent = Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                context.startActivity(intent)
-                Result.success(true)
-            } catch (e2: Exception) {
-                Result.failure(e2)
-            }
+            Result.failure(e)
         }
     }
 
     fun setBatterySaver(enabled: Boolean): Result<Boolean> {
         return try {
-            powerManager.isPowerSaveMode = enabled
+            // Cannot set isPowerSaveMode directly — open settings instead
+            val intent = Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
             updateState("battery_saver", DeviceFeatureState(isOn = enabled))
             Result.success(enabled)
         } catch (e: Exception) {
-            try {
-                val intent = Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                context.startActivity(intent)
-                Result.success(true)
-            } catch (e2: Exception) {
-                Result.failure(e2)
-            }
+            Result.failure(e)
         }
     }
 

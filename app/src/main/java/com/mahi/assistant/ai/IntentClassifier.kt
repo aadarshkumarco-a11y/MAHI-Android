@@ -495,7 +495,7 @@ class IntentClassifier(
     private suspend fun classifyWithAi(input: String): IntentResult {
         val classificationPrompt = """
             Classify the following user input into exactly one of these intent categories:
-            ${IntentType.entries.joinToString(", ") { it.name }}
+            ${IntentType.values().joinToString(", ") { it.name }}
 
             Also extract any relevant parameters (like contact names, search queries, etc.)
 

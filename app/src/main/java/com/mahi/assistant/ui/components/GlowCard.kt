@@ -9,10 +9,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Paint
-import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.mahi.assistant.ui.theme.*
@@ -74,29 +73,14 @@ private fun Modifier.neonGlow(
     alpha: Float,
     blurRadius: Dp,
 ): Modifier = composed {
-    val density = androidx.compose.ui.platform.LocalDensity.current
-    val blurPx = with(density) { blurRadius.toPx() }
-
     this.drawBehind {
-        drawIntoCanvas { canvas ->
-            val paint = Paint().apply {
-                this.color = color.copy(alpha = alpha.coerceIn(0f, 1f))
-                this.asFrameworkPaint().apply {
-                    maskFilter = android.graphics.BlurMaskFilter(
-                        blurPx,
-                        android.graphics.BlurMaskFilter.Blur.NORMAL
-                    )
-                }
-            }
-            val stroke = 2.dp.toPx()
-            // Draw glow around the edges
-            val rect = android.graphics.RectF(
-                stroke, stroke,
-                size.width - stroke, size.height - stroke
-            )
-            canvas.nativeCanvas.drawRoundRect(
-                rect, 12.dp.toPx(), 12.dp.toPx(), paint.asFrameworkPaint()
-            )
-        }
+        // Simulate glow with layered semi-transparent rounded rects
+        val glowColor = color.copy(alpha = alpha.coerceIn(0f, 1f) * 0.3f)
+        drawRoundRect(
+            color = glowColor,
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(12.dp.toPx(), 12.dp.toPx()),
+            topLeft = androidx.compose.ui.geometry.Offset(-blurRadius.toPx(), -blurRadius.toPx()),
+            size = androidx.compose.ui.geometry.Size(size.width + blurRadius.toPx() * 2, size.height + blurRadius.toPx() * 2)
+        )
     }
 }

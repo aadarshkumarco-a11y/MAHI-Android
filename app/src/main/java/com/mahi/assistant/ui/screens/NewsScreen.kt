@@ -33,6 +33,7 @@ data class NewsArticle(
 /**
  * News feed screen — JARVIS intel briefing.
  */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun NewsScreen(
     articles: List<NewsArticle> = sampleNewsArticles,

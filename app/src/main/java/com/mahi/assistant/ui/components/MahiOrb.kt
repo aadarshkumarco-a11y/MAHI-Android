@@ -259,7 +259,7 @@ private fun RadialGradient(
                 center.x, center.y, radius,
                 colors.map { it.toArgb() }.toIntArray(),
                 null,
-                Shader.TileMode.Clamp
+                android.graphics.Shader.TileMode.CLAMP
             )
         }
     }

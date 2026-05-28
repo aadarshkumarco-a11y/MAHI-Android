@@ -93,7 +93,7 @@ fun ControlScreen(
         Spacer(modifier = Modifier.height(16.dp))
 
         // ── Sections with Grid ──────────────────────────────────
-        DeviceSection.entries.forEach { section ->
+        DeviceSection.values().forEach { section ->
             val sectionToggles = toggles.filter { it.section == section }
 
             if (sectionToggles.isNotEmpty()) {
@@ -108,7 +108,7 @@ fun ControlScreen(
                 // 2-column grid
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(2),
-                    modifier = Modifier.height((sectionToggles.size / 2 + sectionToggles.size % 2) * 130.dp),
+                    modifier = Modifier.height(((sectionToggles.size / 2 + sectionToggles.size % 2) * 130).dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     userScrollEnabled = false,

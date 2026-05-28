@@ -14,8 +14,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Paint
-import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.unit.dp
 import com.mahi.assistant.ui.components.*
 import com.mahi.assistant.ui.theme.*
@@ -187,22 +185,11 @@ private fun MessageBubble(message: ChatMessage) {
                 .then(
                     if (!message.isFromUser) {
                         Modifier.drawBehind {
-                            val blurPx = 4.dp.toPx()
-                            drawIntoCanvas { canvas ->
-                                val paint = Paint().apply {
-                                    color = NeonCyan.copy(alpha = 0.15f)
-                                    asFrameworkPaint().maskFilter =
-                                        android.graphics.BlurMaskFilter(
-                                            blurPx,
-                                            android.graphics.BlurMaskFilter.Blur.NORMAL
-                                        )
-                                }
-                                canvas.nativeCanvas.drawRoundRect(
-                                    android.graphics.RectF(0f, 0f, size.width, size.height),
-                                    12.dp.toPx(), 12.dp.toPx(),
-                                    paint.asFrameworkPaint()
-                                )
-                            }
+                            // Simulate glow with semi-transparent rounded rect
+                            drawRoundRect(
+                                color = NeonCyan.copy(alpha = 0.15f),
+                                cornerRadius = androidx.compose.ui.geometry.CornerRadius(12.dp.toPx(), 12.dp.toPx())
+                            )
                         }
                     } else Modifier
                 ),

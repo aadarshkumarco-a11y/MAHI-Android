@@ -9,8 +9,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.graphics.Paint
-import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.mahi.assistant.ui.theme.*
@@ -24,6 +22,7 @@ import com.mahi.assistant.ui.theme.*
  * @param isOn       Current toggle state
  * @param onToggle   Callback when toggled
  */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun DeviceToggleCard(
     name: String,
@@ -55,21 +54,14 @@ fun DeviceToggleCard(
     Card(
         modifier = modifier.drawBehind {
             if (isOn) {
-                val blurPx = 6.dp.toPx()
-                drawIntoCanvas { canvas ->
-                    val paint = Paint().apply {
-                        color = NeonCyan.copy(alpha = currentGlowAlpha.coerceIn(0f, 1f))
-                        asFrameworkPaint().maskFilter = android.graphics.BlurMaskFilter(
-                            blurPx,
-                            android.graphics.BlurMaskFilter.Blur.NORMAL
-                        )
-                    }
-                    canvas.nativeCanvas.drawRoundRect(
-                        android.graphics.RectF(0f, 0f, size.width, size.height),
-                        12.dp.toPx(), 12.dp.toPx(),
-                        paint.asFrameworkPaint()
-                    )
-                }
+                // Simulate glow with layered semi-transparent rounded rects
+                val glowColor = NeonCyan.copy(alpha = currentGlowAlpha.coerceIn(0f, 1f) * 0.3f)
+                drawRoundRect(
+                    color = glowColor,
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(12.dp.toPx(), 12.dp.toPx()),
+                    topLeft = androidx.compose.ui.geometry.Offset(-4.dp.toPx(), -4.dp.toPx()),
+                    size = androidx.compose.ui.geometry.Size(size.width + 8.dp.toPx(), size.height + 8.dp.toPx())
+                )
             }
         },
         colors = CardDefaults.cardColors(

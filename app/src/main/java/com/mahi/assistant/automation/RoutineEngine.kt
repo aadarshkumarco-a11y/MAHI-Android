@@ -33,7 +33,7 @@ import javax.inject.Singleton
  * Execution status of a routine.
  */
 sealed class RoutineExecutionStatus {
-    data object Idle : RoutineExecutionStatus()
+    object Idle : RoutineExecutionStatus()
     data class Running(val routineName: String, val currentAction: String, val progress: Float) :
         RoutineExecutionStatus()
 
