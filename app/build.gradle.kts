@@ -7,7 +7,7 @@ plugins {
 
 android {
     namespace = "com.mahi.assistant"
-    compileSdk = 33
+    compileSdk = 34
 
     defaultConfig {
         applicationId = "com.mahi.assistant"
