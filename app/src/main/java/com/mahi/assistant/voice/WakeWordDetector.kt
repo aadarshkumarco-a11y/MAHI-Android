@@ -37,13 +37,11 @@ class WakeWordDetector(
         BLUEBERRY("blueberry"),
         COMPUTER("computer"),
         GRAPEFRUIT("grapefruit"),
-        GRASSHOPPER_V2("grasshopper"),
         HEY_SIRI("hey siri"),
         JARVIS("jarvis"),
         OK_GOOGLE("ok google"),
-        PICOVOICE_V2("picovoice"),
-        PORCUPINE("porcupine"),
-        TERMINATOR("terminator")
+        TERMINATOR("terminator"),
+        PORCUPINE("porcupine")
     }
 
     interface Callback {
@@ -73,7 +71,7 @@ class WakeWordDetector(
 
     /**
      * Initialize the Porcupine engine. Must be called before start().
-     * In Porcupine v2.x, we use Porcupine.Builder with setBuiltInKeyword.
+     * In Porcupine v2.2, we use Porcupine.Builder with setKeyword(Porcupine.Keyword).
      */
     @Throws(PorcupineException::class)
     fun initialize() {
@@ -81,24 +79,25 @@ class WakeWordDetector(
         val builder = Porcupine.Builder()
             .setAccessKey(accessKey)
 
-        // Set the built-in keyword
-        when (keyword.lowercase()) {
-            "jarvis" -> builder.setBuiltInKeyword(Porcupine.BuiltInKeyword.JARVIS)
-            "hey google" -> builder.setBuiltInKeyword(Porcupine.BuiltInKeyword.HEY_GOOGLE)
-            "alexa" -> builder.setBuiltInKeyword(Porcupine.BuiltInKeyword.ALEXA)
-            "hey siri" -> builder.setBuiltInKeyword(Porcupine.BuiltInKeyword.HEY_SIRI)
-            "ok google" -> builder.setBuiltInKeyword(Porcupine.BuiltInKeyword.OK_GOOGLE)
-            "computer" -> builder.setBuiltInKeyword(Porcupine.BuiltInKeyword.COMPUTER)
-            "terminator" -> builder.setBuiltInKeyword(Porcupine.BuiltInKeyword.TERMINATOR)
-            "grapefruit" -> builder.setBuiltInKeyword(Porcupine.BuiltInKeyword.GRAPEFRUIT)
-            "grasshopper" -> builder.setBuiltInKeyword(Porcupine.BuiltInKeyword.GRASSHOPPER)
-            "bumblebee" -> builder.setBuiltInKeyword(Porcupine.BuiltInKeyword.BUMBLEBEE)
-            "americano" -> builder.setBuiltInKeyword(Porcupine.BuiltInKeyword.AMERICANO)
-            "blueberry" -> builder.setBuiltInKeyword(Porcupine.BuiltInKeyword.BLUEBERRY)
-            "picovoice" -> builder.setBuiltInKeyword(Porcupine.BuiltInKeyword.PICOVOICE)
-            "porcupine" -> builder.setBuiltInKeyword(Porcupine.BuiltInKeyword.PORCUPINE)
-            else -> builder.setBuiltInKeyword(Porcupine.BuiltInKeyword.PORCUPINE)
+        // Set the built-in keyword using Porcupine.Keyword enum (v2.2 API)
+        val porcupineKeyword = when (keyword.lowercase()) {
+            "jarvis" -> Porcupine.Keyword.JARVIS
+            "hey google" -> Porcupine.Keyword.HEY_GOOGLE
+            "alexa" -> Porcupine.Keyword.ALEXA
+            "hey siri" -> Porcupine.Keyword.HEY_SIRI
+            "ok google" -> Porcupine.Keyword.OK_GOOGLE
+            "computer" -> Porcupine.Keyword.COMPUTER
+            "terminator" -> Porcupine.Keyword.TERMINATOR
+            "grapefruit" -> Porcupine.Keyword.GRAPEFRUIT
+            "grasshopper" -> Porcupine.Keyword.GRASSHOPPER
+            "bumblebee" -> Porcupine.Keyword.BUMBLEBEE
+            "americano" -> Porcupine.Keyword.AMERICANO
+            "blueberry" -> Porcupine.Keyword.BLUEBERRY
+            "picovoice" -> Porcupine.Keyword.PICOVOICE
+            "porcupine" -> Porcupine.Keyword.PORCUPINE
+            else -> Porcupine.Keyword.PORCUPINE
         }
+        builder.setKeyword(porcupineKeyword)
 
         porcupine = builder.build(context.applicationContext)
     }

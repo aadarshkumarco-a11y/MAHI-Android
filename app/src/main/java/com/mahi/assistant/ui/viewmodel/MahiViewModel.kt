@@ -111,15 +111,14 @@ class MahiViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            messageDao.getRecent(50).collect { entities: List<MessageEntity> ->
-                _messages.value = entities.map { entity: MessageEntity ->
-                    ChatMessage(
-                        id = entity.id,
-                        role = if (entity.role == "USER") MessageRole.USER else MessageRole.ASSISTANT,
-                        content = entity.content,
-                        timestamp = entity.timestamp
-                    )
-                }
+            val entities = messageDao.getRecent(50)
+            _messages.value = entities.map { entity: MessageEntity ->
+                ChatMessage(
+                    id = entity.id.toString(),
+                    role = if (entity.role == "USER") MessageRole.USER else MessageRole.ASSISTANT,
+                    content = entity.content,
+                    timestamp = entity.timestamp
+                )
             }
         }
 
@@ -263,7 +262,7 @@ class MahiViewModel @Inject constructor(
     private suspend fun fetchNews(category: String): String {
         _newsState.value = _newsState.value.copy(isLoading = true, selectedCategory = category)
         return try {
-            val news = NewsClient.instance.getTopHeadlines(category, "en", "YOUR_GNEWS_API_KEY")
+            val news = NewsClient.instance.getTopHeadlines(category = category, lang = "en", token = "YOUR_GNEWS_API_KEY")
             _newsState.value = NewsUiState(articles = news.articles ?: emptyList(), isLoading = false, selectedCategory = category)
             navigateTo("news")
             if (news.articles.isNullOrEmpty()) "No news articles found."
