@@ -14,6 +14,7 @@ import android.os.PowerManager
 import android.provider.Settings
 import com.mahi.assistant.data.local.DeviceStateDao
 import com.mahi.assistant.data.local.DeviceStateEntity
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -47,7 +48,7 @@ data class DeviceFeatureState(
  */
 @Singleton
 class DeviceControlManager @Inject constructor(
-    private val context: Context,
+    @ApplicationContext private val context: Context,
     private val deviceStateDao: DeviceStateDao
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
