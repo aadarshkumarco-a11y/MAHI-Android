@@ -10,6 +10,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.mahi.assistant.ui.components.GlowCard
@@ -27,8 +28,6 @@ data class Routine(
     val actions: List<String>,
     val isActive: Boolean = false,
 )
-
-private typealias ImageVector = androidx.compose.ui.graphics.vector.ImageVector
 
 /**
  * Routines panel — JARVIS automated sequences.

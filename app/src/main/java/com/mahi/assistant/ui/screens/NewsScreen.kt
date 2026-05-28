@@ -1,5 +1,6 @@
 package com.mahi.assistant.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -12,6 +13,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.mahi.assistant.ui.components.GlowCard
@@ -91,11 +93,15 @@ fun NewsScreen(
             edgePadding = 16.dp,
             divider = {},
             indicator = { tabPositions ->
-                TabRowDefaults.SecondaryIndicator(
-                    modifier = Modifier.tabIndicatorOffset(tabPositions[pagerState.currentPage]),
-                    height = 2.dp,
-                    color = NeonCyan,
-                )
+                val currentTabPosition = tabPositions.getOrNull(pagerState.currentPage)
+                if (currentTabPosition != null) {
+                    Box(
+                        Modifier
+                            .customTabIndicatorOffset(currentTabPosition)
+                            .height(2.dp)
+                            .background(NeonCyan)
+                    )
+                }
             },
         ) {
             categories.forEachIndexed { index, category ->
@@ -103,7 +109,6 @@ fun NewsScreen(
                     selected = pagerState.currentPage == index,
                     onClick = {
                         // We'd normally use pagerState.animateScrollToPage(index)
-                        // but for simplicity, using LaunchedEffect
                     },
                     text = {
                         Text(
@@ -262,3 +267,20 @@ private val sampleNewsArticles = listOf(
         category = "Business",
     ),
 )
+
+/**
+ * Custom tab indicator offset modifier — positions the indicator under the selected tab.
+ * Replaces the Material2 tabIndicatorOffset which is not available in Material3.
+ */
+private fun Modifier.customTabIndicatorOffset(currentTabPosition: TabPosition): Modifier =
+    this then Modifier
+        .layout { measurable, constraints ->
+            val placeable = measurable.measure(constraints)
+            layout(placeable.width, placeable.height) {
+                placeable.placeRelative(
+                    x = currentTabPosition.left.roundToPx(),
+                    y = 0
+                )
+            }
+        }
+        .width(currentTabPosition.width)

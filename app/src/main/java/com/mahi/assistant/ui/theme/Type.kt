@@ -2,42 +2,19 @@ package com.mahi.assistant.ui.theme
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
-import com.mahi.assistant.R
 
 // ═══════════════════════════════════════════════════════════════
-// Font Families — loaded from res/font/
+// Font Families — using system fonts (no custom font files bundled)
 // ═══════════════════════════════════════════════════════════════
 
-val OrbitronFamily = FontFamily(
-    Font(R.font.orbitron_regular, FontWeight.Normal),
-    Font(R.font.orbitron_medium, FontWeight.Medium),
-    Font(R.font.orbitron_bold, FontWeight.Bold),
-    Font(R.font.orbitron_black, FontWeight.Black),
-    Font(R.font.orbitron_light, FontWeight.Light),
-    Font(R.font.orbitron_semibold, FontWeight.SemiBold),
-)
+val OrbitronFamily = FontFamily.SansSerif
+val SpaceGroteskFamily = FontFamily.SansSerif
+val JetBrainsMonoFamily = FontFamily.Monospace
 
-val SpaceGroteskFamily = FontFamily(
-    Font(R.font.space_grotesk_regular, FontWeight.Normal),
-    Font(R.font.space_grotesk_medium, FontWeight.Medium),
-    Font(R.font.space_grotesk_bold, FontWeight.Bold),
-    Font(R.font.space_grotesk_light, FontWeight.Light),
-    Font(R.font.space_grotesk_semibold, FontWeight.SemiBold),
-)
-
-val JetBrainsMonoFamily = FontFamily(
-    Font(R.font.jetbrainsmono_regular, FontWeight.Normal),
-    Font(R.font.jetbrainsmono_medium, FontWeight.Medium),
-    Font(R.font.jetbrainsmono_bold, FontWeight.Bold),
-    Font(R.font.jetbrainsmono_light, FontWeight.Light),
-    Font(R.font.jetbrainsmono_semibold, FontWeight.SemiBold),
-)
-
-// Fallback system families (used when custom fonts not yet bundled)
+// Fallback system families
 val MonospaceFallback = FontFamily.Monospace
 val SansFallback = FontFamily.SansSerif
 
@@ -47,7 +24,7 @@ val SansFallback = FontFamily.SansSerif
 
 val MahiTypography = Typography(
 
-    // ── Display — Orbitron, for hero text / headings ───────────
+    // ── Display — for hero text / headings ───────────
     displayLarge = TextStyle(
         fontFamily = OrbitronFamily,
         fontWeight = FontWeight.Bold,
@@ -73,7 +50,7 @@ val MahiTypography = Typography(
         color = TextPrimary,
     ),
 
-    // ── Headline — Orbitron, for section titles ────────────────
+    // ── Headline — for section titles ────────────────
     headlineLarge = TextStyle(
         fontFamily = OrbitronFamily,
         fontWeight = FontWeight.SemiBold,
@@ -99,7 +76,7 @@ val MahiTypography = Typography(
         color = TextPrimary,
     ),
 
-    // ── Title — Space Grotesk, for card / item titles ──────────
+    // ── Title — for card / item titles ──────────────
     titleLarge = TextStyle(
         fontFamily = SpaceGroteskFamily,
         fontWeight = FontWeight.SemiBold,
@@ -125,7 +102,7 @@ val MahiTypography = Typography(
         color = TextSecondary,
     ),
 
-    // ── Body — Space Grotesk, for readable content ──────────────
+    // ── Body — for readable content ──────────────────
     bodyLarge = TextStyle(
         fontFamily = SpaceGroteskFamily,
         fontWeight = FontWeight.Normal,
@@ -151,7 +128,7 @@ val MahiTypography = Typography(
         color = TextSecondary,
     ),
 
-    // ── Label — JetBrains Mono, for system / tech labels ───────
+    // ── Label — for system / tech labels ────────────
     labelLarge = TextStyle(
         fontFamily = JetBrainsMonoFamily,
         fontWeight = FontWeight.Medium,

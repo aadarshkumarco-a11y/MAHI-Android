@@ -20,6 +20,7 @@ import com.mahi.assistant.ui.theme.*
 /**
  * Settings screen — system configuration for MAHI.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit = {},
@@ -161,8 +162,6 @@ fun SettingsScreen(
                                     border = FilterChipDefaults.filterChipBorder(
                                         borderColor = DarkPanelBorder,
                                         selectedBorderColor = NeonCyan.copy(alpha = 0.5f),
-                                        enabled = true,
-                                        selected = selectedWakeWord == word,
                                         borderWidth = 1.dp,
                                     ),
                                 )
