@@ -3,6 +3,10 @@ package com.mahi.assistant.di
 import android.content.Context
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import com.mahi.assistant.ai.AiConversationEngine
+import com.mahi.assistant.ai.IntentClassifier
+import com.mahi.assistant.voice.TextToSpeechEngine
+import com.mahi.assistant.voice.VoiceRecognitionEngine
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -17,28 +21,33 @@ object VoiceModule {
 
     @Provides
     @Singleton
-    fun provideSpeechRecognizer(
+    fun provideAiConversationEngine(
         @ApplicationContext context: Context
-    ): SpeechRecognizer {
-        return if (SpeechRecognizer.isRecognitionAvailable(context)) {
-            SpeechRecognizer.createSpeechRecognizer(context)
-        } else {
-            throw IllegalStateException("Speech recognition is not available on this device")
-        }
+    ): AiConversationEngine {
+        return AiConversationEngine(context)
     }
 
     @Provides
     @Singleton
-    fun provideTextToSpeech(
+    fun provideIntentClassifier(
+        aiEngine: AiConversationEngine
+    ): IntentClassifier {
+        return IntentClassifier(aiEngine)
+    }
+
+    @Provides
+    @Singleton
+    fun provideVoiceRecognitionEngine(
         @ApplicationContext context: Context
-    ): TextToSpeech {
-        var tts: TextToSpeech? = null
-        val initListener = TextToSpeech.OnInitListener { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                tts?.language = Locale.getDefault()
-            }
-        }
-        tts = TextToSpeech(context, initListener)
-        return tts
+    ): VoiceRecognitionEngine {
+        return VoiceRecognitionEngine(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideTextToSpeechEngine(
+        @ApplicationContext context: Context
+    ): TextToSpeechEngine {
+        return TextToSpeechEngine(context)
     }
 }
