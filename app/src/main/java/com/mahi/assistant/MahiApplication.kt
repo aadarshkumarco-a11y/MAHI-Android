@@ -8,9 +8,14 @@ import dagger.hilt.android.HiltAndroidApp
 class MahiApplication : Application() {
 
     override fun onCreate() {
-        super.onCreate()
-        instance = this
-        initializeApp()
+        try {
+            super.onCreate()
+            instance = this
+            initializeApp()
+        } catch (e: Exception) {
+            Log.e(TAG, "CRITICAL: MahiApplication.onCreate failed", e)
+            // Don't rethrow — let the app at least try to start
+        }
     }
 
     private fun initializeApp() {

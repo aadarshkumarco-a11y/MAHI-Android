@@ -93,8 +93,12 @@ class DeviceControlManager @Inject constructor(
         // Defer initialization — permissions are NOT granted at Hilt-create time.
         // Accessing Bluetooth/Camera here would throw SecurityException on Android 12+.
         scope.launch {
-            try { refreshAllStates() } catch (_: Exception) { /* permissions not granted yet */ }
-            try { discoverFlashCamera() } catch (_: Exception) { /* camera not accessible yet */ }
+            try { refreshAllStates() } catch (e: Exception) {
+                android.util.Log.w("DeviceControlManager", "refreshAllStates failed (permissions not granted yet)", e)
+            }
+            try { discoverFlashCamera() } catch (e: Exception) {
+                android.util.Log.w("DeviceControlManager", "discoverFlashCamera failed", e)
+            }
         }
     }
 

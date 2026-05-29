@@ -17,6 +17,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.mahi.assistant.ui.navigation.MahiNavHost
 import com.mahi.assistant.ui.navigation.MahiRoutes
+import com.mahi.assistant.ui.theme.MAHITheme
 import com.mahi.assistant.ui.theme.*
 
 /**
@@ -58,23 +59,25 @@ fun MahiApp(
     // Determine if bottom bar should be shown (hide on detail screens)
     val showBottomBar = currentDestination?.route in bottomNavItems.map { it.route }
 
-    Scaffold(
-        modifier = modifier,
-        containerColor = DeepSpaceBlack,
-        bottomBar = {
-            if (showBottomBar) {
-                MahiBottomBar(
-                    navController = navController,
-                    currentDestination = currentDestination,
-                )
-            }
-        },
-        contentWindowInsets = WindowInsets(0),
-    ) { innerPadding ->
-        MahiNavHost(
-            navController = navController,
-            modifier = Modifier.padding(innerPadding),
-        )
+    MAHITheme {
+        Scaffold(
+            modifier = modifier,
+            containerColor = DeepSpaceBlack,
+            bottomBar = {
+                if (showBottomBar) {
+                    MahiBottomBar(
+                        navController = navController,
+                        currentDestination = currentDestination,
+                    )
+                }
+            },
+            contentWindowInsets = WindowInsets(0),
+        ) { innerPadding ->
+            MahiNavHost(
+                navController = navController,
+                modifier = Modifier.padding(innerPadding),
+            )
+        }
     }
 }
 
