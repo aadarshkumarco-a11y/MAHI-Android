@@ -39,6 +39,8 @@ class MainActivity : ComponentActivity() {
         android.Manifest.permission.POST_NOTIFICATIONS,
         android.Manifest.permission.READ_PHONE_STATE,
         android.Manifest.permission.BLUETOOTH_CONNECT,
+        android.Manifest.permission.ACCESS_FINE_LOCATION,
+        android.Manifest.permission.ACCESS_COARSE_LOCATION,
     )
 
     private val permissionLauncher = registerForActivityResult(

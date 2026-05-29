@@ -1,13 +1,18 @@
 package com.mahi.assistant.ai
 
+import com.google.gson.Gson
+import com.google.gson.annotations.SerializedName
+
 /**
- * IntentClassifier performs rule-based pattern matching on user input to
- * determine the user's intent. For ambiguous inputs that don't match any
- * pattern, it falls back to AI-based classification via Gemini.
+ * MAX INTELLIGENCE IntentClassifier.
  *
- * Supported intent types cover the most common voice assistant commands:
- * device control, weather, news, YouTube, calls, SMS, alarms, routines,
- * calendar, notifications, and app launching. Unrecognized input defaults to GENERAL_CHAT.
+ * Strategy:
+ * 1. Fast path: Regex patterns for common commands (instant, no API call)
+ * 2. Smart path: Gemini AI classifies the intent for ANY natural language input
+ *
+ * This means MAHI understands "play carryminati latest video on youtube",
+ * "text ayush in WhatsApp that he needs to call me", "aaj ka mausam kaisa hai",
+ * "top 10 bihar breaking news" — ANY phrasing!
  */
 class IntentClassifier(
     private val aiEngine: AiConversationEngine? = null
@@ -20,12 +25,20 @@ class IntentClassifier(
         YOUTUBE,
         CALL,
         SMS,
+        WHATSAPP,
         ALARM,
+        REMINDER,
         ROUTINE,
         CALENDAR,
         NOTIFICATION,
         APP_LAUNCH,
         WEB_SEARCH,
+        MEDIA_CONTROL,
+        LOCATION,
+        BATTERY,
+        CALL_LOG,
+        TIME_DATE,
+        FIND_PHONE,
         GENERAL_CHAT
     }
 
@@ -37,469 +50,132 @@ class IntentClassifier(
     )
 
     // ──────────────────────────────────────────────────────────────────────────
-    // Pattern Definitions
+    // Quick-match patterns (FAST PATH — no AI call needed)
+    // These are the most common, unambiguous commands.
     // ──────────────────────────────────────────────────────────────────────────
 
-    private data class IntentPattern(
+    private data class QuickPattern(
         val type: IntentType,
         val action: String,
-        val patterns: List<Regex>,
+        val pattern: Regex,
         val paramExtractor: ((MatchResult, String) -> Map<String, String>)? = null
     )
 
-    private val intentPatterns: List<IntentPattern> = listOf(
+    private val quickPatterns: List<QuickPattern> = listOf(
 
-        // ── APP_LAUNCH ────────────────────────────────────────────────────────
-        // This MUST be checked BEFORE CALL/SMS because "open whatsapp" should
-        // launch the app, not try to call someone named "whatsapp".
-
-        IntentPattern(
-            type = IntentType.APP_LAUNCH,
-            action = "open_app",
-            patterns = listOf(
-                Regex("(?i)\\bopen\\s+(.+)\\b"),
-                Regex("(?i)\\blaunch\\s+(.+)\\b"),
-                Regex("(?i)\\bstart\\s+(?:the\\s+)?(.+?)\\s+app\\b"),
-                Regex("(?i)\\brun\\s+(.+)\\b")
-            ),
-            paramExtractor = { _, input ->
-                val appPatterns = listOf(
-                    Regex("(?i)\\bopen\\s+(.+)\\b"),
-                    Regex("(?i)\\blaunch\\s+(.+)\\b"),
-                    Regex("(?i)\\bstart\\s+(?:the\\s+)?(.+?)\\s+app\\b"),
-                    Regex("(?i)\\brun\\s+(.+)\\b")
-                )
-                for (pattern in appPatterns) {
-                    val match = pattern.find(input)
-                    if (match != null) {
-                        val appName = match.groupValues[1].trim().lowercase()
-                        // Filter out non-app words that shouldn't be treated as app launches
-                        if (appName !in listOf("the door", "the window", "my eyes", "up", "it", "that", "this", "the app")) {
-                            return@IntentPattern mapOf("app" to appName)
-                        }
-                    }
-                }
-                emptyMap()
-            }
+        // ── YOUTUBE (specific search) ──────────────────────────────────────
+        QuickPattern(IntentType.YOUTUBE, "search_youtube",
+            Regex("(?i)\\b(?:play|watch|search|find|open)\\s+(.+?)\\s+(?:on\\s+)?(?:youtube|yt)\\b"),
+            { m, _ -> mapOf("query" to m.groupValues[1].trim()) }
+        ),
+        QuickPattern(IntentType.YOUTUBE, "search_youtube",
+            Regex("(?i)\\byoutube\\s+(?:pe\\s+)?(?:play|search|find|watch)\\s+(.+)\\b"),
+            { m, _ -> mapOf("query" to m.groupValues[1].trim()) }
+        ),
+        QuickPattern(IntentType.YOUTUBE, "open_youtube",
+            Regex("(?i)\\b(?:open|launch|start)\\s+(?:the\\s+)?youtube\\b"),
+            { _, _ -> mapOf("query" to "") }
         ),
 
-        // ── DEVICE_CONTROL ────────────────────────────────────────────────────
-
-        IntentPattern(
-            type = IntentType.DEVICE_CONTROL,
-            action = "flashlight_on",
-            patterns = listOf(
-                Regex("(?i)\\bturn on\\s+(?:the\\s+)?flashlight\\b"),
-                Regex("(?i)\\bflashlight\\s+on\\b"),
-                Regex("(?i)\\bswitch on\\s+(?:the\\s+)?flashlight\\b"),
-                Regex("(?i)\\benable\\s+(?:the\\s+)?flashlight\\b"),
-                Regex("(?i)\\btorch\\s+on\\b"),
-                Regex("(?i)\\bturn on\\s+(?:the\\s+)?torch\\b")
-            )
+        // ── WHATSAPP ──────────────────────────────────────────────────────
+        QuickPattern(IntentType.WHATSAPP, "send_whatsapp",
+            Regex("(?i)(?:text|message|send|msg|whatsapp|wa)\\s+(.+?)\\s+(?:on\\s+)?(?:whatsapp|wa|wt)\\s+(?:that\\s+)?(.+)"),
+            { m, _ -> mapOf("contact" to m.groupValues[1].trim(), "message" to m.groupValues[2].trim()) }
+        ),
+        QuickPattern(IntentType.WHATSAPP, "send_whatsapp",
+            Regex("(?i)(?:whatsapp|wa|wt)\\s+(.+?)\\s+(?:that\\s+)?(.+)"),
+            { m, _ -> mapOf("contact" to m.groupValues[1].trim(), "message" to m.groupValues[2].trim()) }
+        ),
+        QuickPattern(IntentType.WHATSAPP, "open_whatsapp_chat",
+            Regex("(?i)(?:open|chat|message|text)\\s+(.+?)\\s+(?:on\\s+)?(?:whatsapp|wa|wt)\\b"),
+            { m, _ -> mapOf("contact" to m.groupValues[1].trim()) }
+        ),
+        QuickPattern(IntentType.WHATSAPP, "open_whatsapp_chat",
+            Regex("(?i)(?:whatsapp|wa)\\s+(?:pe\\s+)?(?:message|text|chat|msg)\\s+(.+)\\b"),
+            { m, _ -> mapOf("contact" to m.groupValues[1].trim()) }
         ),
 
-        IntentPattern(
-            type = IntentType.DEVICE_CONTROL,
-            action = "flashlight_off",
-            patterns = listOf(
-                Regex("(?i)\\bturn off\\s+(?:the\\s+)?flashlight\\b"),
-                Regex("(?i)\\bflashlight\\s+off\\b"),
-                Regex("(?i)\\bswitch off\\s+(?:the\\s+)?flashlight\\b"),
-                Regex("(?i)\\bdisable\\s+(?:the\\s+)?flashlight\\b"),
-                Regex("(?i)\\btorch\\s+off\\b"),
-                Regex("(?i)\\bturn off\\s+(?:the\\s+)?torch\\b")
-            )
+        // ── CALL with SIM ─────────────────────────────────────────────────
+        QuickPattern(IntentType.CALL, "make_call",
+            Regex("(?i)\\b(?:call|phone|ring|dial)\\s+(.+?)\\s+(?:from|using|on)\\s+(?:sim|sim\\s*card)\\s*(\\d)\\b"),
+            { m, _ -> mapOf("contact" to m.groupValues[1].trim(), "sim" to m.groupValues[2].trim()) }
+        ),
+        QuickPattern(IntentType.CALL, "make_call",
+            Regex("(?i)\\b(?:call|phone|ring|dial)\\s+(.+)\\b"),
+            { m, _ -> mapOf("contact" to m.groupValues[1].trim()) }
         ),
 
-        IntentPattern(
-            type = IntentType.DEVICE_CONTROL,
-            action = "wifi_on",
-            patterns = listOf(
-                Regex("(?i)\\bturn on\\s+(?:the\\s+)?wi\\s*fi\\b"),
-                Regex("(?i)\\bwi\\s*fi\\s+on\\b"),
-                Regex("(?i)\\benable\\s+(?:the\\s+)?wi\\s*fi\\b"),
-                Regex("(?i)\\bswitch on\\s+(?:the\\s+)?wi\\s*fi\\b")
-            )
+        // ── MEDIA CONTROL ─────────────────────────────────────────────────
+        QuickPattern(IntentType.MEDIA_CONTROL, "play",
+            Regex("(?i)\\b(?:play|resume)\\s+(?:music|song|audio|video)?\\s*$"),
+            { _, _ -> mapOf("action" to "play") }
+        ),
+        QuickPattern(IntentType.MEDIA_CONTROL, "pause",
+            Regex("(?i)\\b(?:pause|stop)\\s+(?:the\\s+)?(?:music|song|audio|video|playback)?\\s*$"),
+            { _, _ -> mapOf("action" to "pause") }
+        ),
+        QuickPattern(IntentType.MEDIA_CONTROL, "next",
+            Regex("(?i)\\b(?:next|skip|forward)\\s+(?:song|track|music)?\\s*$"),
+            { _, _ -> mapOf("action" to "next") }
+        ),
+        QuickPattern(IntentType.MEDIA_CONTROL, "previous",
+            Regex("(?i)\\b(?:previous|prev|back|rewind)\\s+(?:song|track|music)?\\s*$"),
+            { _, _ -> mapOf("action" to "previous") }
         ),
 
-        IntentPattern(
-            type = IntentType.DEVICE_CONTROL,
-            action = "wifi_off",
-            patterns = listOf(
-                Regex("(?i)\\bturn off\\s+(?:the\\s+)?wi\\s*fi\\b"),
-                Regex("(?i)\\bwi\\s*fi\\s+off\\b"),
-                Regex("(?i)\\bdisable\\s+(?:the\\s+)?wi\\s*fi\\b"),
-                Regex("(?i)\\bswitch off\\s+(?:the\\s+)?wi\\s*fi\\b")
-            )
+        // ── FLASHLIGHT ────────────────────────────────────────────────────
+        QuickPattern(IntentType.DEVICE_CONTROL, "flashlight_on",
+            Regex("(?i)\\b(?:turn on|switch on|enable)\\s+(?:the\\s+)?(?:flashlight|torch)\\b")),
+        QuickPattern(IntentType.DEVICE_CONTROL, "flashlight_off",
+            Regex("(?i)\\b(?:turn off|switch off|disable)\\s+(?:the\\s+)?(?:flashlight|torch)\\b")),
+
+        // ── WEATHER ───────────────────────────────────────────────────────
+        QuickPattern(IntentType.WEATHER, "get_weather",
+            Regex("(?i)\\bweather\\s+in\\s+(.+)\\b"),
+            { m, _ -> mapOf("city" to m.groupValues[1].trim()) }
         ),
 
-        IntentPattern(
-            type = IntentType.DEVICE_CONTROL,
-            action = "bluetooth_on",
-            patterns = listOf(
-                Regex("(?i)\\bturn on\\s+(?:the\\s+)?bluetooth\\b"),
-                Regex("(?i)\\bbluetooth\\s+on\\b"),
-                Regex("(?i)\\benable\\s+(?:the\\s+)?bluetooth\\b"),
-                Regex("(?i)\\bswitch on\\s+(?:the\\s+)?bluetooth\\b")
-            )
+        // ── NEWS ──────────────────────────────────────────────────────────
+        QuickPattern(IntentType.NEWS, "get_news",
+            Regex("(?i)\\bnews\\s+(?:about|on|for)\\s+(.+)\\b"),
+            { m, _ -> mapOf("topic" to m.groupValues[1].trim()) }
         ),
 
-        IntentPattern(
-            type = IntentType.DEVICE_CONTROL,
-            action = "bluetooth_off",
-            patterns = listOf(
-                Regex("(?i)\\bturn off\\s+(?:the\\s+)?bluetooth\\b"),
-                Regex("(?i)\\bbluetooth\\s+off\\b"),
-                Regex("(?i)\\bdisable\\s+(?:the\\s+)?bluetooth\\b"),
-                Regex("(?i)\\bswitch off\\s+(?:the\\s+)?bluetooth\\b")
-            )
+        // ── REMINDER ──────────────────────────────────────────────────────
+        QuickPattern(IntentType.REMINDER, "set_reminder",
+            Regex("(?i)\\bremind\\s+(?:me\\s+)?(?:to\\s+)?(.+?)\\s+(?:at|by|in|on)\\s+(.+)\\b"),
+            { m, _ -> mapOf("task" to m.groupValues[1].trim(), "time" to m.groupValues[2].trim()) }
         ),
 
-        IntentPattern(
-            type = IntentType.DEVICE_CONTROL,
-            action = "brightness_up",
-            patterns = listOf(
-                Regex("(?i)\\bbrightness\\s+up\\b"),
-                Regex("(?i)\\bincrease\\s+(?:the\\s+)?brightness\\b"),
-                Regex("(?i)\\bmake\\s+(?:the\\s+)?screen\\s+brighter\\b")
-            )
+        // ── FIND PHONE ────────────────────────────────────────────────────
+        QuickPattern(IntentType.FIND_PHONE, "find_phone",
+            Regex("(?i)\\b(?:find|locate|ring|track)\\s+(?:my\\s+)?(?:phone|device|mobile)\\b")),
+
+        // ── BATTERY ───────────────────────────────────────────────────────
+        QuickPattern(IntentType.BATTERY, "battery_status",
+            Regex("(?i)\\b(?:battery|charge|charging)\\s+(?:level|status|percentage|info|check)?\\b")),
+
+        // ── CALL LOG ──────────────────────────────────────────────────────
+        QuickPattern(IntentType.CALL_LOG, "read_calls",
+            Regex("(?i)\\b(?:call|phone)\\s+(?:history|log|records?|list)\\b")),
+
+        // ── TIME/DATE ─────────────────────────────────────────────────────
+        QuickPattern(IntentType.TIME_DATE, "get_time",
+            Regex("(?i)\\b(?:what'?s\\s+)?(?:the\\s+)?(?:time|clock)\\b")),
+        QuickPattern(IntentType.TIME_DATE, "get_date",
+            Regex("(?i)\\b(?:what'?s\\s+)?(?:the\\s+)?(?:date|day|today)\\b")),
+
+        // ── ALARM ─────────────────────────────────────────────────────────
+        QuickPattern(IntentType.ALARM, "set_alarm",
+            Regex("(?i)\\bset\\s+(?:an?\\s+)?alarm\\s+(?:for\\s+)?(.+)\\b"),
+            { m, _ -> mapOf("time" to m.groupValues[1].trim()) }
         ),
 
-        IntentPattern(
-            type = IntentType.DEVICE_CONTROL,
-            action = "brightness_down",
-            patterns = listOf(
-                Regex("(?i)\\bbrightness\\s+down\\b"),
-                Regex("(?i)\\bdecrease\\s+(?:the\\s+)?brightness\\b"),
-                Regex("(?i)\\bmake\\s+(?:the\\s+)?screen\\s+dimmer\\b"),
-                Regex("(?i)\\bdim\\s+(?:the\\s+)?screen\\b")
-            )
+        // ── APP LAUNCH ────────────────────────────────────────────────────
+        QuickPattern(IntentType.APP_LAUNCH, "open_app",
+            Regex("(?i)\\b(?:open|launch|start)\\s+(.+)\\b"),
+            { m, _ -> mapOf("app" to m.groupValues[1].trim().lowercase()) }
         ),
-
-        IntentPattern(
-            type = IntentType.DEVICE_CONTROL,
-            action = "volume_up",
-            patterns = listOf(
-                Regex("(?i)\\bvolume\\s+up\\b"),
-                Regex("(?i)\\bincrease\\s+(?:the\\s+)?volume\\b"),
-                Regex("(?i)\\bturn\\s+(?:the\\s+)?volume\\s+up\\b")
-            )
-        ),
-
-        IntentPattern(
-            type = IntentType.DEVICE_CONTROL,
-            action = "volume_down",
-            patterns = listOf(
-                Regex("(?i)\\bvolume\\s+down\\b"),
-                Regex("(?i)\\bdecrease\\s+(?:the\\s+)?volume\\b"),
-                Regex("(?i)\\bturn\\s+(?:the\\s+)?volume\\s+down\\b")
-            )
-        ),
-
-        // ── WEATHER ───────────────────────────────────────────────────────────
-
-        IntentPattern(
-            type = IntentType.WEATHER,
-            action = "get_weather",
-            patterns = listOf(
-                Regex("(?i)\\bwhat'?s\\s+(?:the\\s+)?weather\\b"),
-                Regex("(?i)\\bhow'?s\\s+(?:the\\s+)?weather\\b"),
-                Regex("(?i)\\bweather\\s+(?:today|tomorrow|right now|outside|update)\\b"),
-                Regex("(?i)\\b(?:is\\s+it|will\\s+it\\s+be)\\s+(?:hot|cold|rainy|sunny|warm|cool)\\b"),
-                Regex("(?i)\\btemperature\\s+(?:today|tomorrow|outside|right now)\\b"),
-                Regex("(?i)\\bweather\\s+in\\s+(.+)\\b"),
-                Regex("(?i)\\btell\\s+(?:me\\s+)?(?:about\\s+)?(?:today'?s?|the|this)\\s+weather\\b"),
-                Regex("(?i)\\b(?:today'?s|current)\\s+weather\\b"),
-                Regex("(?i)\\bweather\\s+(?:report|forecast|info|update|conditions)\\b"),
-                Regex("(?i)\\bhow\\s+(?:hot|cold|warm)\\s+(?:is\\s+it|outside)\\b"),
-                Regex("(?i)\\brain\\s+(?:today|tomorrow|chance|forecast)\\b"),
-                Regex("(?i)\\bwill\\s+it\\s+rain\\b"),
-                Regex("(?i)\\bdo\\s+i\\s+need\\s+(?:an\\s+)?umbrella\\b")
-            ),
-            paramExtractor = { match, input ->
-                val cityMatch = Regex("(?i)\\bweather\\s+in\\s+(.+)\\b").find(input)
-                if (cityMatch != null) {
-                    mapOf("city" to cityMatch.groupValues[1].trim())
-                } else {
-                    emptyMap()
-                }
-            }
-        ),
-
-        // ── NEWS ──────────────────────────────────────────────────────────────
-
-        IntentPattern(
-            type = IntentType.NEWS,
-            action = "get_news",
-            patterns = listOf(
-                Regex("(?i)\\bshow\\s+(?:me\\s+)?(?:the\\s+)?news\\b"),
-                Regex("(?i)\\bwhat'?s\\s+(?:the\\s+)?news\\b"),
-                Regex("(?i)\\b(?:latest|recent|today'?s|current|breaking)\\s+news\\b"),
-                Regex("(?i)\\bread\\s+(?:me\\s+)?(?:the\\s+)?news\\b"),
-                Regex("(?i)\\bnews\\s+(?:about|on)\\s+(.+)\\b"),
-                Regex("(?i)\\bheadlines\\b"),
-                Regex("(?i)\\bwhat'?s\\s+(?:the\\s+)?(?:latest|breaking|current)\\s+(?:news|headlines)\\b"),
-                Regex("(?i)\\bwhat'?s\\s+breaking\\b"),
-                Regex("(?i)\\bbreaking\\s+(?:news|headlines|stories)\\b"),
-                Regex("(?i)\\b(?:tell|give)\\s+(?:me\\s+)?(?:the\\s+)?(?:latest\\s+)?news\\b"),
-                Regex("(?i)\\bnews\\s+update\\b"),
-                Regex("(?i)\\bwhat\\s+happened\\s+(?:today|in\\s+(?:the\\s+)?news)\\b")
-            ),
-            paramExtractor = { _, input ->
-                val topicMatch = Regex("(?i)\\bnews\\s+(?:about|on)\\s+(.+)\\b").find(input)
-                if (topicMatch != null) {
-                    mapOf("category" to topicMatch.groupValues[1].trim().lowercase())
-                } else {
-                    emptyMap()
-                }
-            }
-        ),
-
-        // ── YOUTUBE ───────────────────────────────────────────────────────────
-
-        IntentPattern(
-            type = IntentType.YOUTUBE,
-            action = "play_youtube",
-            patterns = listOf(
-                Regex("(?i)\\bplay\\s+(?:on\\s+)?youtube\\s+(.+)\\b"),
-                Regex("(?i)\\bsearch\\s+youtube\\s+(?:for\\s+)?(.+)\\b"),
-                Regex("(?i)\\byoutube\\s+(?:search|play)\\s+(.+)\\b"),
-                Regex("(?i)\\bplay\\s+(.+)\\s+on\\s+youtube\\b"),
-                Regex("(?i)\\bwatch\\s+(.+)\\s+on\\s+youtube\\b"),
-                Regex("(?i)\\bfind\\s+(.+)\\s+on\\s+youtube\\b"),
-                Regex("(?i)\\bopen\\s+youtube\\b"),
-                Regex("(?i)\\blaunch\\s+youtube\\b"),
-                Regex("(?i)\\bstart\\s+youtube\\b"),
-                Regex("(?i)\\byoutube\\b")
-            ),
-            paramExtractor = { _, input ->
-                val queryPatterns = listOf(
-                    Regex("(?i)\\bplay\\s+(?:on\\s+)?youtube\\s+(.+)\\b"),
-                    Regex("(?i)\\bsearch\\s+youtube\\s+(?:for\\s+)?(.+)\\b"),
-                    Regex("(?i)\\byoutube\\s+(?:search|play)\\s+(.+)\\b"),
-                    Regex("(?i)\\bplay\\s+(.+)\\s+on\\s+youtube\\b"),
-                    Regex("(?i)\\bwatch\\s+(.+)\\s+on\\s+youtube\\b"),
-                    Regex("(?i)\\bfind\\s+(.+)\\s+on\\s+youtube\\b")
-                )
-                for (pattern in queryPatterns) {
-                    val match = pattern.find(input)
-                    if (match != null) {
-                        return@IntentPattern mapOf("query" to match.groupValues[1].trim())
-                    }
-                }
-                // Just "open youtube" — no search query
-                mapOf("query" to "")
-            }
-        ),
-
-        // ── CALL ──────────────────────────────────────────────────────────────
-
-        IntentPattern(
-            type = IntentType.CALL,
-            action = "make_call",
-            patterns = listOf(
-                Regex("(?i)\\bcall\\s+(.+)\\b"),
-                Regex("(?i)\\bphone\\s+(.+)\\b"),
-                Regex("(?i)\\bmake\\s+(?:a\\s+)?call\\s+to\\s+(.+)\\b"),
-                Regex("(?i)\\bring\\s+(.+)\\b"),
-                Regex("(?i)\\bdial\\s+(.+)\\b")
-            ),
-            paramExtractor = { _, input ->
-                val callPatterns = listOf(
-                    Regex("(?i)\\bcall\\s+(.+)\\b"),
-                    Regex("(?i)\\bphone\\s+(.+)\\b"),
-                    Regex("(?i)\\bmake\\s+(?:a\\s+)?call\\s+to\\s+(.+)\\b"),
-                    Regex("(?i)\\bring\\s+(.+)\\b"),
-                    Regex("(?i)\\bdial\\s+(.+)\\b")
-                )
-                for (pattern in callPatterns) {
-                    val match = pattern.find(input)
-                    if (match != null) {
-                        return@IntentPattern mapOf("contact" to match.groupValues[1].trim())
-                    }
-                }
-                emptyMap()
-            }
-        ),
-
-        // ── SMS ───────────────────────────────────────────────────────────────
-
-        IntentPattern(
-            type = IntentType.SMS,
-            action = "send_sms",
-            patterns = listOf(
-                Regex("(?i)\\bsend\\s+(?:a\\s+)?(?:sms|text|message)\\s+to\\s+(.+)\\b"),
-                Regex("(?i)\\btext\\s+(.+)\\b"),
-                Regex("(?i)\\bsms\\s+(.+)\\b"),
-                Regex("(?i)\\bsend\\s+(?:a\\s+)?message\\s+to\\s+(.+)\\b"),
-                Regex("(?i)\\bmessage\\s+(.+)\\s+that\\s+(.+)\\b")
-            ),
-            paramExtractor = { _, input ->
-                val contactPatterns = listOf(
-                    Regex("(?i)\\bsend\\s+(?:a\\s+)?(?:sms|text|message)\\s+to\\s+(.+?)(?:\\s+that\\s+|$)\\b"),
-                    Regex("(?i)\\btext\\s+(.+?)(?:\\s+that\\s+|$)\\b"),
-                    Regex("(?i)\\bsms\\s+(.+?)(?:\\s+that\\s+|$)\\b"),
-                    Regex("(?i)\\bsend\\s+(?:a\\s+)?message\\s+to\\s+(.+?)(?:\\s+that\\s+|$)\\b"),
-                    Regex("(?i)\\bmessage\\s+(.+)\\s+that\\s+(.+)\\b")
-                )
-                for (pattern in contactPatterns) {
-                    val match = pattern.find(input)
-                    if (match != null) {
-                        val params = mutableMapOf("contact" to match.groupValues[1].trim())
-                        if (match.groupValues.size > 2 && match.groupValues[2].isNotBlank()) {
-                            params["message"] = match.groupValues[2].trim()
-                        }
-                        return@IntentPattern params
-                    }
-                }
-                emptyMap()
-            }
-        ),
-
-        // ── ALARM ─────────────────────────────────────────────────────────────
-
-        IntentPattern(
-            type = IntentType.ALARM,
-            action = "set_alarm",
-            patterns = listOf(
-                Regex("(?i)\\bset\\s+(?:an?\\s+)?alarm\\b"),
-                Regex("(?i)\\balarm\\s+for\\s+(.+)\\b"),
-                Regex("(?i)\\bwake\\s+me\\s+up\\b"),
-                Regex("(?i)\\bset\\s+(?:an?\\s+)?timer\\b"),
-                Regex("(?i)\\btimer\\s+for\\s+(.+)\\b"),
-                Regex("(?i)\\bremind\\s+me\\s+in\\s+(.+)\\b")
-            ),
-            paramExtractor = { _, input ->
-                val timePatterns = listOf(
-                    Regex("(?i)\\balarm\\s+for\\s+(.+)\\b"),
-                    Regex("(?i)\\btimer\\s+for\\s+(.+)\\b"),
-                    Regex("(?i)\\bremind\\s+me\\s+in\\s+(.+)\\b"),
-                    Regex("(?i)\\bwake\\s+me\\s+up\\s+at\\s+(.+)\\b"),
-                    Regex("(?i)\\bset\\s+(?:an?\\s+)?alarm\\s+(?:for\\s+)?at\\s+(.+)\\b")
-                )
-                for (pattern in timePatterns) {
-                    val match = pattern.find(input)
-                    if (match != null) {
-                        return@IntentPattern mapOf("time" to match.groupValues[1].trim())
-                    }
-                }
-                emptyMap()
-            }
-        ),
-
-        // ── ROUTINE ───────────────────────────────────────────────────────────
-
-        IntentPattern(
-            type = IntentType.ROUTINE,
-            action = "morning_routine",
-            patterns = listOf(
-                Regex("(?i)\\bgood\\s+morning\\b"),
-                Regex("(?i)\\bmorning\\s+routine\\b"),
-                Regex("(?i)\\bstart\\s+(?:my\\s+)?morning\\b")
-            )
-        ),
-
-        IntentPattern(
-            type = IntentType.ROUTINE,
-            action = "night_routine",
-            patterns = listOf(
-                Regex("(?i)\\bgood\\s+night\\b"),
-                Regex("(?i)\\bnight\\s+routine\\b"),
-                Regex("(?i)\\bbedtime\\s+routine\\b"),
-                Regex("(?i)\\bstart\\s+(?:my\\s+)?night\\s+routine\\b")
-            )
-        ),
-
-        // ── CALENDAR ──────────────────────────────────────────────────────────
-
-        IntentPattern(
-            type = IntentType.CALENDAR,
-            action = "check_calendar",
-            patterns = listOf(
-                Regex("(?i)\\bwhat'?s\\s+(?:on\\s+)?(?:my\\s+)?(?:calendar|schedule)\\b"),
-                Regex("(?i)\\b(?:do\\s+i\\s+have|any)\\s+(?:appointments?|meetings?|events?)\\b"),
-                Regex("(?i)\\bcheck\\s+(?:my\\s+)?(?:calendar|schedule)\\b"),
-                Regex("(?i)\\bwhat'?s\\s+(?:my\\s+)?schedule\\b"),
-                Regex("(?i)\\bcalendar\\b")
-            )
-        ),
-
-        IntentPattern(
-            type = IntentType.CALENDAR,
-            action = "add_event",
-            patterns = listOf(
-                Regex("(?i)\\badd\\s+(?:an?\\s+)?event\\b"),
-                Regex("(?i)\\bschedule\\s+(.+)\\b"),
-                Regex("(?i)\\bcreate\\s+(?:an?\\s+)?(?:event|meeting|appointment)\\b")
-            ),
-            paramExtractor = { _, input ->
-                val eventMatch = Regex("(?i)\\bschedule\\s+(.+)\\b").find(input)
-                if (eventMatch != null) {
-                    mapOf("event" to eventMatch.groupValues[1].trim())
-                } else {
-                    emptyMap()
-                }
-            }
-        ),
-
-        // ── NOTIFICATION ──────────────────────────────────────────────────────
-
-        IntentPattern(
-            type = IntentType.NOTIFICATION,
-            action = "read_notifications",
-            patterns = listOf(
-                Regex("(?i)\\bread\\s+(?:my\\s+)?notifications?\\b"),
-                Regex("(?i)\\bcheck\\s+(?:my\\s+)?notifications?\\b"),
-                Regex("(?i)\\bany\\s+notifications?\\b"),
-                Regex("(?i)\\bwhat\\s+(?:are\\s+)?(?:my\\s+)?notifications?\\b"),
-                Regex("(?i)\\bshow\\s+(?:me\\s+)?(?:my\\s+)?notifications?\\b"),
-                Regex("(?i)\\bdo\\s+i\\s+have\\s+(?:any\\s+)?notifications?\\b")
-            )
-        ),
-
-        // ── WEB_SEARCH ────────────────────────────────────────────────────────
-
-        IntentPattern(
-            type = IntentType.WEB_SEARCH,
-            action = "web_search",
-            patterns = listOf(
-                Regex("(?i)\\bsearch\\s+(?:for\\s+)?(.+)\\b"),
-                Regex("(?i)\\bgoogle\\s+(.+)\\b"),
-                Regex("(?i)\\blook\\s+up\\s+(.+)\\b"),
-                Regex("(?i)\\bfind\\s+(?:out\\s+)?(?:about\\s+)?(.+)\\b"),
-                Regex("(?i)\\bwho\\s+is\\s+(.+)\\b"),
-                Regex("(?i)\\bwhat\\s+is\\s+(.+)\\b"),
-                Regex("(?i)\\bwhen\\s+(?:is|was|did|will)\\s+(.+)\\b"),
-                Regex("(?i)\\bwhere\\s+(?:is|are|was|were)\\s+(.+)\\b"),
-                Regex("(?i)\\bhow\\s+(?:to|do|does|many|much|old|far|long)\\s+(.+)\\b"),
-                Regex("(?i)\\bwhy\\s+(?:is|are|was|were|do|does|did)\\s+(.+)\\b"),
-                Regex("(?i)\\b(?:ipl|cricket|football|match)\\s+(?:match|score|today|live)?\\b"),
-                Regex("(?i)\\b(?:today'?s?|current)\\s+(?:match|score)\\b")
-            ),
-            paramExtractor = { _, input ->
-                val searchPatterns = listOf(
-                    Regex("(?i)\\bsearch\\s+(?:for\\s+)?(.+)\\b"),
-                    Regex("(?i)\\bgoogle\\s+(.+)\\b"),
-                    Regex("(?i)\\blook\\s+up\\s+(.+)\\b"),
-                    Regex("(?i)\\bfind\\s+(?:out\\s+)?(?:about\\s+)?(.+)\\b"),
-                    Regex("(?i)\\bwho\\s+is\\s+(.+)\\b"),
-                    Regex("(?i)\\bwhat\\s+is\\s+(.+)\\b"),
-                    Regex("(?i)\\bwhen\\s+(?:is|was|did|will)\\s+(.+)\\b"),
-                    Regex("(?i)\\bwhere\\s+(?:is|are|was|were)\\s+(.+)\\b"),
-                    Regex("(?i)\\bhow\\s+(?:to|do|does|many|much|old|far|long)\\s+(.+)\\b"),
-                    Regex("(?i)\\bwhy\\s+(?:is|are|was|were|do|does|did)\\s+(.+)\\b"),
-                    Regex("(?i)\\b(?:ipl|cricket|football)\\s+(?:match|score|today|live)?\\b")
-                )
-                for (pattern in searchPatterns) {
-                    val match = pattern.find(input)
-                    if (match != null && match.groupValues[1].isNotBlank()) {
-                        return@IntentPattern mapOf("query" to match.groupValues[1].trim())
-                    }
-                }
-                // Fallback: use the whole input as query
-                mapOf("query" to input.trim())
-            }
-        )
     )
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -507,145 +183,210 @@ class IntentClassifier(
     // ──────────────────────────────────────────────────────────────────────────
 
     /**
-     * Classify the user's input into an IntentResult using rule-based
-     * pattern matching. Falls back to AI classification if no pattern matches
-     * and an AiConversationEngine is provided.
-     *
-     * @param input The raw text from speech recognition.
-     * @return IntentResult with the classified type, action, and extracted parameters.
+     * Classify user input.
+     * 1. Try quick regex patterns first (instant, offline)
+     * 2. If no match, use Gemini AI to understand (max intelligence)
      */
     suspend fun classify(input: String): IntentResult {
         val trimmedInput = input.trim()
         if (trimmedInput.isBlank()) {
-            return IntentResult(
-                type = IntentType.GENERAL_CHAT,
-                action = "empty_input",
-                response = "I didn't catch that. Could you please repeat?"
-            )
+            return IntentResult(IntentType.GENERAL_CHAT, "empty_input",
+                response = "I didn't catch that. Could you please repeat?")
         }
 
-        // Try rule-based classification first
-        for (intentPattern in intentPatterns) {
-            for (pattern in intentPattern.patterns) {
-                val match = pattern.find(trimmedInput)
-                if (match != null) {
-                    val params = intentPattern.paramExtractor?.invoke(match, trimmedInput)
-                        ?: emptyMap()
-                    return IntentResult(
-                        type = intentPattern.type,
-                        action = intentPattern.action,
-                        params = params
-                    )
-                }
+        // Step 1: Quick regex match
+        for (qp in quickPatterns) {
+            val match = qp.pattern.find(trimmedInput)
+            if (match != null) {
+                val params = qp.paramExtractor?.invoke(match, trimmedInput) ?: emptyMap()
+                return IntentResult(type = qp.type, action = qp.action, params = params)
             }
         }
 
-        // No pattern matched — try AI classification fallback
+        // Step 2: Gemini AI classification for MAX intelligence
         if (aiEngine != null) {
             return classifyWithAi(trimmedInput)
         }
 
-        // Default to general chat
-        return IntentResult(
-            type = IntentType.GENERAL_CHAT,
-            action = "general_conversation"
-        )
+        // Fallback
+        return IntentResult(IntentType.GENERAL_CHAT, "general_conversation")
     }
 
     /**
-     * Non-suspend version of classify that only uses rule-based patterns.
-     * Use this when you don't need AI fallback or are not in a coroutine context.
+     * Synchronous version — regex only, no AI fallback.
      */
     fun classifySync(input: String): IntentResult {
         val trimmedInput = input.trim()
         if (trimmedInput.isBlank()) {
-            return IntentResult(
-                type = IntentType.GENERAL_CHAT,
-                action = "empty_input"
-            )
+            return IntentResult(IntentType.GENERAL_CHAT, "empty_input")
         }
 
-        for (intentPattern in intentPatterns) {
-            for (pattern in intentPattern.patterns) {
-                val match = pattern.find(trimmedInput)
-                if (match != null) {
-                    val params = intentPattern.paramExtractor?.invoke(match, trimmedInput)
-                        ?: emptyMap()
-                    return IntentResult(
-                        type = intentPattern.type,
-                        action = intentPattern.action,
-                        params = params
-                    )
-                }
+        for (qp in quickPatterns) {
+            val match = qp.pattern.find(trimmedInput)
+            if (match != null) {
+                val params = qp.paramExtractor?.invoke(match, trimmedInput) ?: emptyMap()
+                return IntentResult(type = qp.type, action = qp.action, params = params)
             }
         }
 
-        return IntentResult(
-            type = IntentType.GENERAL_CHAT,
-            action = "general_conversation"
-        )
+        return IntentResult(IntentType.GENERAL_CHAT, "general_conversation")
     }
 
-    /**
-     * Use the Gemini AI to classify ambiguous input that didn't match
-     * any rule-based patterns.
-     */
+    // ──────────────────────────────────────────────────────────────────────────
+    // Gemini AI Classification — THE BRAIN
+    // ──────────────────────────────────────────────────────────────────────────
+
     private suspend fun classifyWithAi(input: String): IntentResult {
-        val classificationPrompt = """
-            Classify the following user input into exactly one of these intent categories:
-            ${IntentType.values().joinToString(", ") { it.name }}
+        val prompt = """
+You are the intent classifier for MAHI, a voice assistant. Classify the user's input into EXACTLY ONE of these intent types:
 
-            Also extract any relevant parameters (like contact names, search queries, etc.)
+- DEVICE_CONTROL: Toggle flashlight, wifi, bluetooth, brightness, volume, DND, etc.
+- WEATHER: Any weather/temperature/mausam question
+- NEWS: Any news/headlines/breaking news request
+- YOUTUBE: Play/search/watch something on YouTube
+- CALL: Make a phone call to someone
+- SMS: Send a text message (regular SMS)
+- WHATSAPP: Send a WhatsApp message or open WhatsApp chat
+- ALARM: Set an alarm
+- REMINDER: Set a reminder (different from alarm - reminders have a task description)
+- ROUTINE: Morning/night routine
+- CALENDAR: Calendar/schedule related
+- NOTIFICATION: Read/check notifications
+- APP_LAUNCH: Open/launch an app
+- WEB_SEARCH: Search the web for information
+- MEDIA_CONTROL: Play/pause/next/previous music or media
+- LOCATION: Where am I / nearby places / directions
+- BATTERY: Battery level/status
+- CALL_LOG: Call history / recent calls
+- TIME_DATE: What time/date is it
+- FIND_PHONE: Find/locate/ring my phone
+- GENERAL_CHAT: General conversation that doesn't fit above
 
-            Respond in this exact JSON format only, nothing else:
-            {"type":"INTENT_TYPE","action":"action_name","params":{"key":"value"}}
+Extract relevant parameters. For example:
+- "play carryminati latest video on youtube" → type:YOUTUBE, query:"carryminati latest video"
+- "call ayush from sim 1" → type:CALL, contact:"ayush", sim:"1"
+- "text ayush in whatsapp that he needs to call me" → type:WHATSAPP, contact:"ayush", message:"he needs to call me"
+- "aaj ka mausam kaisa hai" → type:WEATHER, city:"" (use default)
+- "top 10 bihar breaking news" → type:NEWS, topic:"bihar", count:"10"
+- "remind me to buy milk at 5pm" → type:REMINDER, task:"buy milk", time:"5pm"
+- "battery kitni hai" → type:BATTERY
+- "kal ayush ne call kiya tha" → type:CALL_LOG, contact:"ayush"
 
-            User input: $input
+Respond ONLY with valid JSON, nothing else:
+{"type":"INTENT_TYPE","action":"action_name","params":{"key":"value"}}
+
+User input: $input
         """.trimIndent()
 
         return try {
-            val aiResponse = aiEngine!!.queryOnce(classificationPrompt)
-
-            // Parse the JSON response
-            val jsonMatch = Regex("\\{[^}]+\\}").find(aiResponse)
-            if (jsonMatch != null) {
-                val json = jsonMatch.value
-                val typeMatch = Regex(""""type"\s*:\s*"(\w+)"""").find(json)
-                val actionMatch = Regex(""""action"\s*:\s*"([^"]+)"""").find(json)
-
-                val typeName = typeMatch?.groupValues?.get(1)
-                val intentType = try {
-                    IntentType.valueOf(typeName ?: "GENERAL_CHAT")
-                } catch (_: IllegalArgumentException) {
-                    IntentType.GENERAL_CHAT
-                }
-
-                val params = mutableMapOf<String, String>()
-                val paramPattern = Regex("""\"(\w+)\"\s*:\s*\"([^\"]+)\"""")
-                paramPattern.findAll(json).forEach { match ->
-                    val key = match.groupValues[1]
-                    val value = match.groupValues[2]
-                    if (key != "type" && key != "action") {
-                        params[key] = value
-                    }
-                }
-
-                IntentResult(
-                    type = intentType,
-                    action = actionMatch?.groupValues?.get(1) ?: "ai_classified",
-                    params = params
-                )
-            } else {
-                IntentResult(
-                    type = IntentType.GENERAL_CHAT,
-                    action = "general_conversation"
-                )
-            }
+            val aiResponse = aiEngine.queryOnce(prompt)
+            parseAiClassification(aiResponse, input)
         } catch (_: Exception) {
-            IntentResult(
-                type = IntentType.GENERAL_CHAT,
-                action = "general_conversation"
-            )
+            // AI failed — try basic keyword matching as last resort
+            keywordFallback(input)
         }
     }
+
+    private fun parseAiClassification(response: String, originalInput: String): IntentResult {
+        return try {
+            // Extract JSON from response
+            val jsonMatch = Regex("\\{[^{}]*\\}").find(response) ?: return keywordFallback(originalInput)
+            val json = jsonMatch.value
+
+            val gson = Gson()
+            val parsed = gson.fromJson(json, AiClassificationResult::class.java)
+
+            val intentType = try {
+                IntentType.valueOf(parsed.type ?: "GENERAL_CHAT")
+            } catch (_: IllegalArgumentException) {
+                IntentType.GENERAL_CHAT
+            }
+
+            IntentResult(
+                type = intentType,
+                action = parsed.action ?: "ai_classified",
+                params = parsed.params ?: emptyMap()
+            )
+        } catch (_: Exception) {
+            keywordFallback(originalInput)
+        }
+    }
+
+    /**
+     * Last-resort keyword matching when AI is unavailable.
+     */
+    private fun keywordFallback(input: String): IntentResult {
+        val lower = input.lowercase()
+
+        // Check for keywords
+        return when {
+            // YouTube
+            lower.contains("youtube") || lower.contains("yt") || lower.contains("video") ->
+                IntentResult(IntentType.YOUTUBE, "search_youtube", mapOf("query" to extractTopic(lower, listOf("youtube", "yt", "video", "play", "watch"))))
+
+            // WhatsApp
+            lower.contains("whatsapp") || lower.contains("wa ") || lower.contains("watsapp") ->
+                IntentResult(IntentType.WHATSAPP, "open_whatsapp_chat", mapOf("contact" to extractContact(lower)))
+
+            // Call
+            lower.contains("call") || lower.contains("phone") || lower.contains("ring") || lower.contains("dial") ->
+                IntentResult(IntentType.CALL, "make_call", mapOf("contact" to extractContact(lower)))
+
+            // Weather
+            lower.contains("weather") || lower.contains("mausam") || lower.contains("temperature") || lower.contains("garmi") || lower.contains("thand") || lower.contains("barish") || lower.contains("rain") ->
+                IntentResult(IntentType.WEATHER, "get_weather")
+
+            // News
+            lower.contains("news") || lower.contains("khabar") || lower.contains("headline") || lower.contains("breaking") ->
+                IntentResult(IntentType.NEWS, "get_news", mapOf("topic" to extractTopic(lower, listOf("news", "khabar", "headline", "breaking", "latest", "top"))))
+
+            // Music/Media
+            lower.contains("play") && (lower.contains("music") || lower.contains("song") || lower.contains("gana")) ->
+                IntentResult(IntentType.MEDIA_CONTROL, "play", mapOf("action" to "play"))
+
+            // Alarm
+            lower.contains("alarm") || lower.contains("wake") ->
+                IntentResult(IntentType.ALARM, "set_alarm")
+
+            // Reminder
+            lower.contains("remind") || lower.contains("yaad") ->
+                IntentResult(IntentType.REMINDER, "set_reminder")
+
+            // Battery
+            lower.contains("battery") || lower.contains("charge") ->
+                IntentResult(IntentType.BATTERY, "battery_status")
+
+            // Flashlight
+            lower.contains("flashlight") || lower.contains("torch") || lower.contains("flash") ->
+                IntentResult(IntentType.DEVICE_CONTROL, "flashlight_on")
+
+            // Time
+            lower.contains("time") || lower.contains("samay") || lower.contains("baje") ->
+                IntentResult(IntentType.TIME_DATE, "get_time")
+
+            else -> IntentResult(IntentType.GENERAL_CHAT, "general_conversation")
+        }
+    }
+
+    private fun extractContact(input: String): String {
+        // Remove common keywords and try to extract the name
+        val cleaned = input.replace(Regex("(?i)\\b(?:call|phone|ring|dial|text|message|send|whatsapp|wa|from|sim\\s*\\d|on|to|that|the|please)\\b"), "").trim()
+        return cleaned.ifBlank { "unknown" }
+    }
+
+    private fun extractTopic(input: String, removeWords: List<String>): String {
+        var cleaned = input
+        for (word in removeWords) {
+            cleaned = cleaned.replace(Regex("(?i)\\b$word\\b"), "")
+        }
+        return cleaned.trim().ifBlank { "" }
+    }
+
+    // ── Gson helper class ────────────────────────────────────────────────────
+
+    private data class AiClassificationResult(
+        val type: String? = null,
+        val action: String? = null,
+        val params: Map<String, String>? = null
+    )
 }

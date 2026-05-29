@@ -1,21 +1,30 @@
 package com.mahi.assistant.ui.viewmodel
 
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.hardware.camera2.CameraManager
+import android.location.Geocoder
+import android.location.LocationManager
+import android.media.AudioManager
 import android.net.Uri
+import android.os.BatteryManager
+import android.os.Build
+import android.os.SystemClock
 import android.provider.AlarmClock
+import android.provider.CallLog
 import android.provider.ContactsContract
 import android.provider.Settings
+import android.text.format.DateUtils
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mahi.assistant.ai.AiConversationEngine
 import com.mahi.assistant.ai.IntentClassifier
-import com.mahi.assistant.api.NewsService
-import com.mahi.assistant.api.WeatherService
-import com.mahi.assistant.api.WeatherClient
 import com.mahi.assistant.api.NewsClient
+import com.mahi.assistant.api.NewsService
 import com.mahi.assistant.automation.RoutineEngine
 import com.mahi.assistant.control.DeviceControlManager
 import com.mahi.assistant.data.local.MessageDao
@@ -36,6 +45,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.net.URLEncoder
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import javax.inject.Inject
 
 data class WeatherUiState(
@@ -140,7 +153,7 @@ class MahiViewModel @Inject constructor(
 
     private var processingJob: Job? = null
 
-    // ── Known app package names for APP_LAUNCH ───────────────────────────────
+    // ── App package map ──────────────────────────────────────────────────────
 
     private val appPackageMap = mapOf(
         "youtube" to "com.google.android.youtube",
@@ -167,7 +180,6 @@ class MahiViewModel @Inject constructor(
         "clock" to "com.android.deskclock",
         "calendar" to "com.android.calendar",
         "play store" to "com.android.vending",
-        "play music" to "com.google.android.music",
         "netflix" to "com.netflix.mediaclient",
         "amazon" to "com.amazon.mShop.android.shopping",
         "flipkart" to "com.flipkart.android",
@@ -177,7 +189,6 @@ class MahiViewModel @Inject constructor(
         "gpay" to "com.google.android.apps.nbu.paisa.user",
         "google pay" to "com.google.android.apps.nbu.paisa.user",
         "phonepe" to "com.phonepe.app",
-        "files" to "com.google.android.apps.nbu.files",
         "gallery" to "com.android.gallery3d",
         "photos" to "com.google.android.apps.photos",
         "notes" to "com.google.android.keep",
@@ -187,11 +198,22 @@ class MahiViewModel @Inject constructor(
         "linkedin" to "com.linkedin.android",
         "reddit" to "com.reddit.frontpage",
         "pinterest" to "com.pinterest",
-        "discord" to "com.discord"
+        "discord" to "com.discord",
+        "files" to "com.google.android.apps.nbu.files",
+        "sharechat" to "in.mohalla.sharechat",
+        "jio" to "com.jio.myjio",
+        "jiotv" to "com.jio.jiotv",
+        "hotstar" to "in.startv.hotstar",
+        "disney hotstar" to "in.startv.hotstar",
+        "mx player" to "com.mxtech.videoplayer.ad",
+        "vlc" to "org.videolan.vlc",
+        "truecaller" to "com.truecaller",
+        "uber" to "com.ubercab",
+        "ola" to "com.olacabs.customer",
+        "rapido" to "com.rapido.passenger"
     )
 
     init {
-        // Load saved messages (defensive — Room might not be ready)
         viewModelScope.launch {
             try {
                 val entities = messageDao.getRecent(50)
@@ -203,15 +225,11 @@ class MahiViewModel @Inject constructor(
                         timestamp = entity.timestamp
                     )
                 }
-            } catch (e: Exception) {
-                // Room not ready or corrupted — start with empty messages
-            }
+            } catch (_: Exception) { }
         }
 
-        // Load settings
-        try { loadSettings() } catch (_: Exception) { /* Settings not available */ }
+        try { loadSettings() } catch (_: Exception) { }
 
-        // Voice recognition callback
         try {
             voiceRecognition.callback = object : VoiceRecognitionEngine.Callback {
                 override fun onResult(text: String) {
@@ -235,33 +253,25 @@ class MahiViewModel @Inject constructor(
                     }
                 }
             }
-        } catch (_: Exception) { /* Voice recognition not available */ }
+        } catch (_: Exception) { }
 
-        // TTS callback
         try {
             ttsEngine.callback = object : TextToSpeechEngine.Callback {
                 override fun onSpeakStart(utteranceId: String) { _assistantState.value = AssistantState.SPEAKING }
                 override fun onSpeakEnd(utteranceId: String) { _assistantState.value = AssistantState.IDLE }
                 override fun onError(utteranceId: String) { _assistantState.value = AssistantState.IDLE }
             }
-        } catch (_: Exception) { /* TTS not available */ }
+        } catch (_: Exception) { }
 
-        // Routines
         viewModelScope.launch {
-            try {
-                routineEngine.availableRoutines.collect { _routines.value = it }
-            } catch (_: Exception) { /* Routine engine not available */ }
+            try { routineEngine.availableRoutines.collect { _routines.value = it } } catch (_: Exception) { }
         }
-
-        // Notifications
         viewModelScope.launch {
-            try {
-                MahiNotificationListenerService.instance?.notifications?.collect { _notifications.value = it }
-            } catch (_: Exception) { /* Notification listener not available */ }
+            try { MahiNotificationListenerService.instance?.notifications?.collect { _notifications.value = it } } catch (_: Exception) { }
         }
     }
 
-    // ── Settings Management ─────────────────────────────────────────
+    // ── Settings ──────────────────────────────────────────────────────────
 
     fun loadSettings() {
         _settingsState.value = SettingsUiState(
@@ -277,83 +287,30 @@ class MahiViewModel @Inject constructor(
         )
     }
 
-    fun updateGeminiKey(key: String) {
-        settingsManager.setGeminiApiKey(key)
-        _settingsState.value = _settingsState.value.copy(geminiKey = key, isSaved = false)
-    }
-
-    fun updatePorcupineKey(key: String) {
-        settingsManager.setPorcupineKey(key)
-        _settingsState.value = _settingsState.value.copy(porcupineKey = key, isSaved = false)
-    }
-
-    fun updateWeatherKey(key: String) {
-        settingsManager.setWeatherApiKey(key)
-        _settingsState.value = _settingsState.value.copy(weatherKey = key, isSaved = false)
-    }
-
-    fun updateNewsKey(key: String) {
-        settingsManager.setNewsApiKey(key)
-        _settingsState.value = _settingsState.value.copy(newsKey = key, isSaved = false)
-    }
-
-    fun updateVoiceSpeed(speed: Float) {
-        settingsManager.setVoiceSpeed(speed)
-        _settingsState.value = _settingsState.value.copy(voiceSpeed = speed)
-    }
-
-    fun updateVoicePitch(pitch: Float) {
-        settingsManager.setVoicePitch(pitch)
-        _settingsState.value = _settingsState.value.copy(voicePitch = pitch)
-    }
-
-    fun updateWakeWord(word: String) {
-        settingsManager.setWakeWord(word)
-        _settingsState.value = _settingsState.value.copy(wakeWord = word)
-    }
-
-    fun updateAutoStartOnBoot(enabled: Boolean) {
-        settingsManager.setAutoStartOnBoot(enabled)
-        _settingsState.value = _settingsState.value.copy(autoStartOnBoot = enabled)
-    }
-
-    fun updateFloatingAssistant(enabled: Boolean) {
-        settingsManager.setFloatingAssistant(enabled)
-        _settingsState.value = _settingsState.value.copy(floatingAssistant = enabled)
-    }
-
-    fun saveAllSettings() {
-        _settingsState.value = _settingsState.value.copy(isSaved = true)
-    }
-
-    // ── Navigation ──────────────────────────────────────────────────
+    fun updateGeminiKey(key: String) { settingsManager.setGeminiApiKey(key); _settingsState.value = _settingsState.value.copy(geminiKey = key, isSaved = false) }
+    fun updatePorcupineKey(key: String) { settingsManager.setPorcupineKey(key); _settingsState.value = _settingsState.value.copy(porcupineKey = key, isSaved = false) }
+    fun updateWeatherKey(key: String) { settingsManager.setWeatherApiKey(key); _settingsState.value = _settingsState.value.copy(weatherKey = key, isSaved = false) }
+    fun updateNewsKey(key: String) { settingsManager.setNewsApiKey(key); _settingsState.value = _settingsState.value.copy(newsKey = key, isSaved = false) }
+    fun updateVoiceSpeed(speed: Float) { settingsManager.setVoiceSpeed(speed); _settingsState.value = _settingsState.value.copy(voiceSpeed = speed) }
+    fun updateVoicePitch(pitch: Float) { settingsManager.setVoicePitch(pitch); _settingsState.value = _settingsState.value.copy(voicePitch = pitch) }
+    fun updateWakeWord(word: String) { settingsManager.setWakeWord(word); _settingsState.value = _settingsState.value.copy(wakeWord = word) }
+    fun updateAutoStartOnBoot(enabled: Boolean) { settingsManager.setAutoStartOnBoot(enabled); _settingsState.value = _settingsState.value.copy(autoStartOnBoot = enabled) }
+    fun updateFloatingAssistant(enabled: Boolean) { settingsManager.setFloatingAssistant(enabled); _settingsState.value = _settingsState.value.copy(floatingAssistant = enabled) }
+    fun saveAllSettings() { _settingsState.value = _settingsState.value.copy(isSaved = true) }
 
     fun navigateTo(route: String) { _currentRoute.value = route }
-
-    // ── Voice ───────────────────────────────────────────────────────
-
-    fun startListening() {
-        _partialTranscript.value = ""
-        voiceRecognition.startListening()
-    }
-
-    fun stopListening() {
-        voiceRecognition.stopListening()
-        _isListening.value = false
-        _assistantState.value = AssistantState.IDLE
-    }
-
+    fun startListening() { _partialTranscript.value = ""; voiceRecognition.startListening() }
+    fun stopListening() { voiceRecognition.stopListening(); _isListening.value = false; _assistantState.value = AssistantState.IDLE }
     fun updateInput(text: String) { _currentInput.value = text }
-
-    // ── Chat ────────────────────────────────────────────────────────
 
     fun submitInput() {
         val input = _currentInput.value.trim()
-        if (input.isNotBlank()) {
-            _currentInput.value = ""
-            processInput(input)
-        }
+        if (input.isNotBlank()) { _currentInput.value = ""; processInput(input) }
     }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // MAIN BRAIN - Process any input with MAX intelligence
+    // ══════════════════════════════════════════════════════════════════════
 
     fun processInput(input: String) {
         processingJob?.cancel()
@@ -363,20 +320,16 @@ class MahiViewModel @Inject constructor(
             // Save user message
             val userMessage = ChatMessage(role = MessageRole.USER, content = input)
             _messages.value = _messages.value + userMessage
-            try {
-                messageDao.insert(MessageEntity(role = "USER", content = input, timestamp = System.currentTimeMillis()))
-            } catch (_: Exception) { }
+            try { messageDao.insert(MessageEntity(role = "USER", content = input, timestamp = System.currentTimeMillis())) } catch (_: Exception) { }
 
-            // Classify intent and handle
-            val intent = intentClassifier.classifySync(input)
+            // Classify using AI-powered classifier (regex first, then Gemini)
+            val intent = intentClassifier.classify(input)
             val response = handleIntent(intent, input)
 
             // Save assistant message
             val assistantMessage = ChatMessage(role = MessageRole.ASSISTANT, content = response)
             _messages.value = _messages.value + assistantMessage
-            try {
-                messageDao.insert(MessageEntity(role = "ASSISTANT", content = response, timestamp = System.currentTimeMillis()))
-            } catch (_: Exception) { }
+            try { messageDao.insert(MessageEntity(role = "ASSISTANT", content = response, timestamp = System.currentTimeMillis())) } catch (_: Exception) { }
 
             // Speak the response
             val speechText = response.replace(Regex("\\[\\w+\\]\\s*"), "").replace(Regex("[\\*#_]"), "").take(500)
@@ -387,43 +340,623 @@ class MahiViewModel @Inject constructor(
     private suspend fun handleIntent(intent: IntentClassifier.IntentResult, originalInput: String): String {
         return when (intent.type) {
             IntentClassifier.IntentType.DEVICE_CONTROL -> handleDeviceControl(intent)
-            IntentClassifier.IntentType.WEATHER -> fetchWeather(intent.params["city"] ?: "New Delhi")
-            IntentClassifier.IntentType.NEWS -> fetchNews(intent.params["category"] ?: "general")
+            IntentClassifier.IntentType.WEATHER -> fetchWeather(intent.params["city"] ?: "")
+            IntentClassifier.IntentType.NEWS -> fetchNews(intent.params["topic"] ?: intent.params["category"] ?: "", intent.params["count"] ?: "5")
             IntentClassifier.IntentType.YOUTUBE -> launchYouTube(intent.params["query"] ?: "")
-            IntentClassifier.IntentType.CALL -> launchCall(intent.params["contact"] ?: "")
+            IntentClassifier.IntentType.CALL -> launchCall(intent.params["contact"] ?: "", intent.params["sim"] ?: "")
             IntentClassifier.IntentType.SMS -> launchSms(intent.params["contact"] ?: "", intent.params["message"])
+            IntentClassifier.IntentType.WHATSAPP -> handleWhatsApp(intent.params["contact"] ?: "", intent.params["message"])
             IntentClassifier.IntentType.ALARM -> launchAlarm(intent.params["time"])
+            IntentClassifier.IntentType.REMINDER -> setReminder(intent.params["task"] ?: "", intent.params["time"] ?: "")
             IntentClassifier.IntentType.ROUTINE -> executeRoutine(intent.action)
             IntentClassifier.IntentType.NOTIFICATION -> readNotifications()
             IntentClassifier.IntentType.CALENDAR -> launchCalendar()
             IntentClassifier.IntentType.APP_LAUNCH -> launchApp(intent.params["app"] ?: "")
             IntentClassifier.IntentType.WEB_SEARCH -> launchWebSearch(intent.params["query"] ?: originalInput)
+            IntentClassifier.IntentType.MEDIA_CONTROL -> handleMediaControl(intent.params["action"] ?: "play")
+            IntentClassifier.IntentType.LOCATION -> handleLocation()
+            IntentClassifier.IntentType.BATTERY -> getBatteryStatus()
+            IntentClassifier.IntentType.CALL_LOG -> getCallLog(intent.params["contact"] ?: "")
+            IntentClassifier.IntentType.TIME_DATE -> getTimeDate()
+            IntentClassifier.IntentType.FIND_PHONE -> findPhone()
             else -> fetchAiResponse(originalInput)
         }
     }
 
-    // ── App Launch ──────────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════
+    // YOUTUBE — Smart Search + Play
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun launchYouTube(query: String): String {
+        return try {
+            if (query.isNotBlank()) {
+                // Try YouTube app search first
+                try {
+                    val intent = Intent(Intent.ACTION_SEARCH).apply {
+                        component = ComponentName("com.google.android.youtube", "com.google.android.youtube.SearchActivity")
+                        putExtra("query", query)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    appContext.startActivity(intent)
+                    return "Playing $query on YouTube."
+                } catch (_: ActivityNotFoundException) { }
+
+                // Fallback: open YouTube with web search URL
+                val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=${URLEncoder.encode(query, "UTF-8")}")).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                appContext.startActivity(webIntent)
+                "Searching YouTube for $query."
+            } else {
+                val launchIntent = appContext.packageManager.getLaunchIntentForPackage("com.google.android.youtube")
+                if (launchIntent != null) {
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    appContext.startActivity(launchIntent)
+                    "Opening YouTube."
+                } else {
+                    val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com")).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                    appContext.startActivity(webIntent)
+                    "Opening YouTube in browser."
+                }
+            }
+        } catch (e: Exception) {
+            "Couldn't open YouTube. ${e.message}"
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // WHATSAPP — Smart Messaging
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun handleWhatsApp(contact: String, message: String?): String {
+        if (contact.isBlank()) return "Who would you like to message on WhatsApp?"
+
+        return try {
+            val phoneNumber = lookupContactPhoneNumber(contact)
+            val whatsappNumber = phoneNumber ?: contact.replace(Regex("\\s"), "")
+
+            if (message != null && message.isNotBlank()) {
+                // Send message via WhatsApp
+                val intent = Intent(Intent.ACTION_VIEW).apply {
+                    data = Uri.parse("https://wa.me/$whatsappNumber?text=${URLEncoder.encode(message, "UTF-8")}")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                appContext.startActivity(intent)
+                "Sending WhatsApp message to $contact: $message"
+            } else {
+                // Just open chat
+                val intent = Intent(Intent.ACTION_VIEW).apply {
+                    data = Uri.parse("https://wa.me/$whatsappNumber")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                appContext.startActivity(intent)
+                "Opening WhatsApp chat with $contact."
+            }
+        } catch (e: Exception) {
+            // Fallback: just open WhatsApp
+            try {
+                val launchIntent = appContext.packageManager.getLaunchIntentForPackage("com.whatsapp")
+                if (launchIntent != null) {
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    appContext.startActivity(launchIntent)
+                    "Opening WhatsApp. I couldn't find $contact's number."
+                } else {
+                    "WhatsApp is not installed on your device."
+                }
+            } catch (_: Exception) {
+                "Couldn't open WhatsApp. ${e.message}"
+            }
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // CALL — with SIM Selection
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun launchCall(contact: String, simSlot: String): String {
+        if (contact.isBlank()) return "Who would you like me to call?"
+
+        return try {
+            val phoneNumber = lookupContactPhoneNumber(contact)
+
+            if (phoneNumber != null) {
+                val uri = Uri.parse("tel:$phoneNumber")
+                val callIntent = Intent(Intent.ACTION_CALL).apply {
+                    data = uri
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+                    // SIM selection
+                    if (simSlot.isNotBlank()) {
+                        val slotIndex = simSlot.toIntOrNull()?.minus(1) ?: 0
+                        // Try TelecomManager for SIM selection (Android 5.1+)
+                        putExtra("com.android.phone.extra.slot", slotIndex)
+                        putExtra("slotId", slotIndex)
+                        putExtra("simId", slotIndex)
+                    }
+                }
+                appContext.startActivity(callIntent)
+                val simInfo = if (simSlot.isNotBlank()) " from SIM $simSlot" else ""
+                "Calling $contact$simInfo."
+            } else {
+                // Contact not found — open dialer
+                val dialIntent = Intent(Intent.ACTION_DIAL).apply {
+                    data = Uri.parse("tel:${Uri.encode(contact)}")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                appContext.startActivity(dialIntent)
+                "I couldn't find $contact in your contacts. Opening dialer."
+            }
+        } catch (e: SecurityException) {
+            try {
+                val dialIntent = Intent(Intent.ACTION_DIAL).apply {
+                    data = Uri.parse("tel:${Uri.encode(contact)}")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                appContext.startActivity(dialIntent)
+                "Opening dialer for $contact. Grant phone permission for direct calling."
+            } catch (e2: Exception) {
+                "I need phone permission to make calls. Please grant it in Settings."
+            }
+        } catch (e: Exception) {
+            "Couldn't call $contact. ${e.message}"
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // WEATHER — Open-Meteo (FREE, No API key!) + OWM fallback
+    // ══════════════════════════════════════════════════════════════════════
+
+    private suspend fun fetchWeather(city: String): String {
+        _weatherState.value = _weatherState.value.copy(isLoading = true)
+        val cityName = city.ifBlank { "New Delhi" } // Default for Indian users
+
+        // Try Open-Meteo first (FREE, no API key)
+        return try {
+            // Geocode city name to coordinates
+            val geocoder = Geocoder(appContext, Locale.getDefault())
+            val addresses = geocoder.getFromLocationName(cityName, 1)
+            if (addresses.isNullOrEmpty()) {
+                _weatherState.value = _weatherState.value.copy(isLoading = false)
+                return "I couldn't find $cityName. Try a different city name."
+            }
+            val address = addresses[0]
+            val lat = address.latitude
+            val lon = address.longitude
+            val resolvedCity = address.locality ?: cityName
+
+            // Call Open-Meteo API (completely free!)
+            val openMeteoUrl = "https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&timezone=auto"
+            val client = okhttp3.OkHttpClient.Builder().connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS).build()
+            val request = okhttp3.Request.Builder().url(openMeteoUrl).build()
+            val response = client.newCall(request).execute()
+            val body = response.body?.string()
+
+            if (body != null) {
+                val gson = com.google.gson.Gson()
+                val weatherData = gson.fromJson(body, OpenMeteoResponse::class.java)
+                val current = weatherData.current
+
+                if (current != null) {
+                    val temp = current.temperature_2m?.toInt() ?: 0
+                    val feelsLike = current.apparent_temperature?.toInt() ?: temp
+                    val humidity = current.relative_humidity_2m?.toInt() ?: 0
+                    val windSpeed = current.wind_speed_10m ?: 0.0
+                    val desc = weatherCodeToText(current.weather_code ?: 0)
+
+                    _weatherState.value = WeatherUiState(
+                        city = resolvedCity,
+                        temperature = temp.toDouble(),
+                        description = desc,
+                        humidity = humidity,
+                        windSpeed = windSpeed,
+                        feelsLike = feelsLike.toDouble(),
+                        isLoading = false
+                    )
+                    navigateTo("weather")
+                    "Weather in $resolvedCity: $temp degrees, $desc. Feels like $feelsLike degrees. Humidity $humidity%. Wind speed ${String.format("%.1f", windSpeed)} km/h."
+                } else {
+                    fallbackWeather(cityName)
+                }
+            } else {
+                fallbackWeather(cityName)
+            }
+        } catch (e: Exception) {
+            fallbackWeather(cityName)
+        }
+    }
+
+    private suspend fun fallbackWeather(city: String): String {
+        // Fallback to OpenWeatherMap if Open-Meteo fails
+        return try {
+            val weatherApiKey = settingsManager.getWeatherApiKey()
+            if (weatherApiKey.isBlank()) {
+                _weatherState.value = _weatherState.value.copy(isLoading = false)
+                return "I couldn't fetch weather data. Please check your internet connection."
+            }
+            val weather = com.mahi.assistant.api.WeatherClient.instance.getCurrentWeather(city, weatherApiKey, "metric")
+            _weatherState.value = WeatherUiState(
+                city = weather.name ?: city,
+                temperature = weather.main?.temp ?: 0.0,
+                description = weather.weather?.firstOrNull()?.description ?: "",
+                humidity = weather.main?.humidity ?: 0,
+                windSpeed = weather.wind?.speed ?: 0.0,
+                feelsLike = weather.main?.feelsLike ?: 0.0,
+                isLoading = false
+            )
+            navigateTo("weather")
+            "Weather in ${weather.name ?: city}: ${(weather.main?.temp ?: 0.0).toInt()} degrees, ${weather.weather?.firstOrNull()?.description ?: "clear"}. Feels like ${(weather.main?.feelsLike ?: 0.0).toInt()} degrees."
+        } catch (e: Exception) {
+            _weatherState.value = _weatherState.value.copy(isLoading = false, error = e.message)
+            "Couldn't fetch weather for $city. Please check your internet connection."
+        }
+    }
+
+    private fun weatherCodeToText(code: Int): String {
+        return when (code) {
+            0 -> "clear sky"
+            1, 2, 3 -> "partly cloudy"
+            45, 48 -> "foggy"
+            51, 53, 55 -> "drizzle"
+            56, 57 -> "freezing drizzle"
+            61, 63, 65 -> "rainy"
+            66, 67 -> "freezing rain"
+            71, 73, 75 -> "snowy"
+            77 -> "snow grains"
+            80, 81, 82 -> "rain showers"
+            85, 86 -> "snow showers"
+            95 -> "thunderstorm"
+            96, 99 -> "thunderstorm with hail"
+            else -> "variable weather"
+        }
+    }
+
+    // Open-Meteo response model
+    private data class OpenMeteoResponse(val current: OpenMeteoCurrent? = null)
+    private data class OpenMeteoCurrent(
+        val temperature_2m: Double? = null,
+        val relative_humidity_2m: Double? = null,
+        val apparent_temperature: Double? = null,
+        val weather_code: Int? = null,
+        val wind_speed_10m: Double? = null
+    )
+
+    // ══════════════════════════════════════════════════════════════════════
+    // NEWS — Enhanced with topic search
+    // ══════════════════════════════════════════════════════════════════════
+
+    private suspend fun fetchNews(topic: String, count: String): String {
+        _newsState.value = _newsState.value.copy(isLoading = true)
+        val maxArticles = count.toIntOrNull()?.coerceIn(1, 10) ?: 5
+
+        return try {
+            val newsApiKey = settingsManager.getNewsApiKey()
+            if (newsApiKey.isBlank()) {
+                _newsState.value = _newsState.value.copy(isLoading = false)
+                return "News API key not set. Please add your GNews API key in Settings."
+            }
+
+            val news = if (topic.isNotBlank()) {
+                NewsClient.instance.searchNews(query = topic, lang = "en", max = maxArticles, token = newsApiKey)
+            } else {
+                NewsClient.instance.getTopHeadlines(category = "general", lang = "en", token = newsApiKey)
+            }
+
+            _newsState.value = NewsUiState(articles = news.articles ?: emptyList(), isLoading = false, selectedCategory = topic)
+            navigateTo("news")
+
+            if (news.articles.isNullOrEmpty()) "No news articles found for $topic."
+            else {
+                val topicLabel = if (topic.isNotBlank()) "about $topic" else ""
+                "Top $topicLabel headlines: ${news.articles.take(maxArticles).mapIndexed { i, a -> "${i + 1}. ${a.title ?: "Untitled"}" }.joinToString(". ")}"
+            }
+        } catch (e: retrofit2.HttpException) {
+            _newsState.value = _newsState.value.copy(isLoading = false, error = e.message)
+            when (e.code()) {
+                401 -> "News API key is invalid. Please update it in Settings."
+                else -> "Couldn't fetch news. Error: ${e.code()}"
+            }
+        } catch (e: Exception) {
+            _newsState.value = _newsState.value.copy(isLoading = false, error = e.message)
+            "Couldn't fetch news. Please check your internet connection."
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // MEDIA CONTROL — Play/Pause/Next/Previous
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun handleMediaControl(action: String): String {
+        return try {
+            when (action.lowercase()) {
+                "play", "resume" -> {
+                    val intent = Intent(Intent.ACTION_MEDIA_BUTTON).apply {
+                        putExtra(Intent.EXTRA_KEY_EVENT, android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_MEDIA_PLAY))
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    appContext.sendBroadcast(intent)
+                    "Playing music."
+                }
+                "pause", "stop" -> {
+                    val intent = Intent(Intent.ACTION_MEDIA_BUTTON).apply {
+                        putExtra(Intent.EXTRA_KEY_EVENT, android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_MEDIA_PAUSE))
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    appContext.sendBroadcast(intent)
+                    "Music paused."
+                }
+                "next", "skip", "forward" -> {
+                    val intent = Intent(Intent.ACTION_MEDIA_BUTTON).apply {
+                        putExtra(Intent.EXTRA_KEY_EVENT, android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_MEDIA_NEXT))
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    appContext.sendBroadcast(intent)
+                    "Playing next song."
+                }
+                "previous", "prev", "back", "rewind" -> {
+                    val intent = Intent(Intent.ACTION_MEDIA_BUTTON).apply {
+                        putExtra(Intent.EXTRA_KEY_EVENT, android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS))
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    appContext.sendBroadcast(intent)
+                    "Playing previous song."
+                }
+                else -> "Unknown media action."
+            }
+        } catch (e: Exception) {
+            "Couldn't control media. ${e.message}"
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // BATTERY STATUS
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun getBatteryStatus(): String {
+        return try {
+            val bm = appContext.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+            val level = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+            val isCharging = bm.isCharging
+
+            val chargingStatus = if (isCharging) "and is charging" else "and is not charging"
+            val healthAdvice = when {
+                level <= 10 -> "Battery is very low! Please charge your phone immediately."
+                level <= 20 -> "Battery is low. Consider charging soon."
+                level <= 50 -> "Battery is moderate. You have enough charge for now."
+                level >= 80 && isCharging -> "Battery is almost full! You can unplug the charger."
+                else -> "Battery level is good."
+            }
+            "Battery is at $level% $chargingStatus. $healthAdvice"
+        } catch (e: Exception) {
+            "Couldn't check battery status. ${e.message}"
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // CALL LOG
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun getCallLog(contact: String): String {
+        return try {
+            val calls = mutableListOf<String>()
+            val uri = CallLog.Calls.CONTENT_URI
+            val projection = arrayOf(CallLog.Calls.NUMBER, CallLog.Calls.CACHED_NAME, CallLog.Calls.TYPE, CallLog.Calls.DATE, CallLog.Calls.DURATION)
+            val selection = if (contact.isNotBlank()) "${CallLog.Calls.CACHED_NAME} LIKE ?" else null
+            val selectionArgs = if (contact.isNotBlank()) arrayOf("%$contact%") else null
+
+            appContext.contentResolver.query(uri, projection, selection, selectionArgs, "${CallLog.Calls.DATE} DESC")?.use { cursor ->
+                var count = 0
+                while (cursor.moveToNext() && count < 5) {
+                    val name = cursor.getString(cursor.getColumnIndexOrThrow(CallLog.Calls.CACHED_NAME)) ?: "Unknown"
+                    val type = when (cursor.getInt(cursor.getColumnIndexOrThrow(CallLog.Calls.TYPE))) {
+                        CallLog.Calls.INCOMING_TYPE -> "Incoming"
+                        CallLog.Calls.OUTGOING_TYPE -> "Outgoing"
+                        CallLog.Calls.MISSED_TYPE -> "Missed"
+                        else -> "Unknown"
+                    }
+                    val duration = cursor.getString(cursor.getColumnIndexOrThrow(CallLog.Calls.DURATION)) ?: "0"
+                    val date = cursor.getLong(cursor.getColumnIndexOrThrow(CallLog.Calls.DATE))
+                    val timeAgo = DateUtils.getRelativeTimeSpanString(date, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS).toString()
+                    calls.add("$type call ${if (contact.isNotBlank()) "" else "from $name "}$timeAgo, duration ${duration}s")
+                    count++
+                }
+            }
+
+            if (calls.isEmpty()) {
+                if (contact.isNotBlank()) "No calls found with $contact."
+                else "No recent calls found."
+            } else {
+                val prefix = if (contact.isNotBlank()) "Recent calls with $contact: " else "Recent calls: "
+                prefix + calls.joinToString(". ")
+            }
+        } catch (e: SecurityException) {
+            "I need call log permission to read your call history. Please grant it in Settings."
+        } catch (e: Exception) {
+            "Couldn't read call log. ${e.message}"
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // TIME & DATE
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun getTimeDate(): String {
+        val now = Date()
+        val time = SimpleDateFormat("hh:mm a", Locale.getDefault()).format(now)
+        val date = SimpleDateFormat("EEEE, dd MMMM yyyy", Locale.getDefault()).format(now)
+        return "It's $time on $date."
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // FIND PHONE
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun findPhone(): String {
+        return try {
+            val am = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            val maxVolume = am.getStreamMaxVolume(AudioManager.STREAM_RING)
+            am.setStreamVolume(AudioManager.STREAM_RING, maxVolume, 0)
+
+            // Play ringtone
+            val ringtoneUri = Settings.System.DEFAULT_RINGTONE_URI
+            val ringtone = android.media.RingtoneManager.getRingtone(appContext, ringtoneUri)
+            ringtone.play()
+            "Ringing your phone at maximum volume! Find it!"
+        } catch (e: Exception) {
+            "I couldn't ring your phone. ${e.message}"
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // LOCATION
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun handleLocation(): String {
+        return try {
+            val lm = appContext.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            val providers = lm.allProviders
+
+            // Try to get last known location
+            var locationText = "I couldn't determine your location. Please enable location services."
+
+            for (provider in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
+                try {
+                    val loc = lm.getLastKnownLocation(provider)
+                    if (loc != null) {
+                        val geocoder = Geocoder(appContext, Locale.getDefault())
+                        val addresses = geocoder.getFromLocation(loc.latitude, loc.longitude, 1)
+                        if (!addresses.isNullOrEmpty()) {
+                            val addr = addresses[0]
+                            val area = addr.subLocality ?: addr.locality ?: ""
+                            val city = addr.locality ?: ""
+                            val country = addr.countryName ?: ""
+                            locationText = "You are currently in ${if (area.isNotBlank()) "$area, " else ""}$city, $country."
+                        } else {
+                            locationText = "Your location: ${String.format("%.4f", loc.latitude)}, ${String.format("%.4f", loc.longitude)}."
+                        }
+                        break
+                    }
+                } catch (_: Exception) { continue }
+            }
+            locationText
+        } catch (e: SecurityException) {
+            "I need location permission to know where you are. Please grant it in Settings."
+        } catch (e: Exception) {
+            "Couldn't determine your location. ${e.message}"
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // SMART REMINDERS
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun setReminder(task: String, time: String): String {
+        if (task.isBlank()) return "What should I remind you about?"
+
+        return try {
+            // Create a notification-based reminder using AlarmManager
+            val intent = Intent(appContext, ReminderReceiver::class.java).apply {
+                putExtra("task", task)
+            }
+            val pendingIntent = PendingIntent.getBroadcast(
+                appContext, (System.currentTimeMillis() % 100000).toInt(),
+                intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val alarmManager = appContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+
+            if (time.isNotBlank()) {
+                // Try to parse time - basic parsing
+                val delayMs = parseTimeToMillis(time)
+                if (delayMs > 0) {
+                    alarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                        SystemClock.elapsedRealtime() + delayMs, pendingIntent)
+                    val timeDesc = formatDelay(delayMs)
+                    "Reminder set: $task in $timeDesc."
+                } else {
+                    // Can't parse time - set alarm clock instead
+                    launchAlarm(time)
+                    return "I set an alarm for $time. For reminders, say the time like 'in 5 minutes' or 'at 3pm'."
+                }
+            } else {
+                // No time - remind in 1 minute as default
+                alarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    SystemClock.elapsedRealtime() + 60000, pendingIntent)
+                "Reminder set: $task in 1 minute."
+            }
+        } catch (e: Exception) {
+            "Couldn't set reminder. ${e.message}"
+        }
+    }
+
+    private fun parseTimeToMillis(time: String): Long {
+        val lower = time.lowercase().trim()
+
+        // "in X minutes/hours"
+        val inMinutes = Regex("(?i)(\\d+)\\s*min").find(lower)
+        if (inMinutes != null) return inMinutes.groupValues[1].toLongOrNull()?.times(60000L) ?: 0L
+
+        val inHours = Regex("(?i)(\\d+)\\s*hour").find(lower)
+        if (inHours != null) return inHours.groupValues[1].toLongOrNull()?.times(3600000L) ?: 0L
+
+        val inSeconds = Regex("(?i)(\\d+)\\s*sec").find(lower)
+        if (inSeconds != null) return inSeconds.groupValues[1].toLongOrNull()?.times(1000L) ?: 0L
+
+        // "at HH:mm" or "at HH am/pm"
+        val atTime = Regex("(?i)(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm)?").find(lower)
+        if (atTime != null) {
+            var hour = atTime.groupValues[1].toIntOrNull() ?: return 0L
+            val minute = atTime.groupValues[2].toIntOrNull() ?: 0
+            val ampm = atTime.groupValues[3].lowercase()
+
+            if (ampm == "pm" && hour < 12) hour += 12
+            if (ampm == "am" && hour == 12) hour = 0
+
+            val calendar = java.util.Calendar.getInstance()
+            calendar.set(java.util.Calendar.HOUR_OF_DAY, hour)
+            calendar.set(java.util.Calendar.MINUTE, minute)
+            calendar.set(java.util.Calendar.SECOND, 0)
+
+            // If the time has already passed today, schedule for tomorrow
+            if (calendar.timeInMillis <= System.currentTimeMillis()) {
+                calendar.add(java.util.Calendar.DAY_OF_MONTH, 1)
+            }
+
+            return calendar.timeInMillis - System.currentTimeMillis()
+        }
+
+        return 0L
+    }
+
+    private fun formatDelay(ms: Long): String {
+        val minutes = ms / 60000
+        val hours = minutes / 60
+        return when {
+            hours > 0 -> "${hours}h ${minutes % 60}m"
+            minutes > 0 -> "${minutes}m"
+            else -> "${ms / 1000}s"
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // APP LAUNCH
+    // ══════════════════════════════════════════════════════════════════════
 
     private fun launchApp(appName: String): String {
         if (appName.isBlank()) return "Which app would you like me to open?"
-
         val packageName = appPackageMap[appName.lowercase().trim()]
 
         return try {
             if (packageName != null) {
-                // Known app — launch directly
                 val launchIntent = appContext.packageManager.getLaunchIntentForPackage(packageName)
                 if (launchIntent != null) {
                     launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     appContext.startActivity(launchIntent)
                     "Opening ${appName.replaceFirstChar { it.uppercase() }}."
                 } else {
-                    // App installed but no launch intent — open Play Store
                     openPlayStore(packageName)
-                    "${appName.replaceFirstChar { it.uppercase() }} can't be opened directly. Opening Play Store."
+                    "${appName.replaceFirstChar { it.uppercase() }} is not installed. Opening Play Store."
                 }
             } else {
-                // Unknown app name — try to find it by searching package manager
                 val foundPackage = findPackageByAppName(appName)
                 if (foundPackage != null) {
                     val launchIntent = appContext.packageManager.getLaunchIntentForPackage(foundPackage)
@@ -436,197 +969,69 @@ class MahiViewModel @Inject constructor(
                         "Opening ${appName.replaceFirstChar { it.uppercase() }}."
                     }
                 } else {
-                    // Not found — search Play Store
                     openPlayStoreSearch(appName)
-                    "I couldn't find ${appName.replaceFirstChar { it.uppercase() }} on your device. Searching Play Store."
+                    "Couldn't find ${appName.replaceFirstChar { it.uppercase() }} on your device. Searching Play Store."
                 }
             }
-        } catch (e: ActivityNotFoundException) {
-            openPlayStoreSearch(appName)
-            "Opening Play Store to find ${appName.replaceFirstChar { it.uppercase() }}."
         } catch (e: Exception) {
-            "I couldn't open ${appName.replaceFirstChar { it.uppercase() }}. ${e.message}"
+            "Couldn't open ${appName.replaceFirstChar { it.uppercase() }}. ${e.message}"
         }
     }
 
     private fun findPackageByAppName(appName: String): String? {
         return try {
             val query = appName.lowercase().trim()
-            val packages = appContext.packageManager.getInstalledApplications(0)
-            packages.firstOrNull { appInfo ->
-                val label = appContext.packageManager.getApplicationLabel(appInfo).toString().lowercase()
-                label.contains(query) || query.contains(label)
-            }?.packageName
-        } catch (_: Exception) {
-            null
-        }
+            appContext.packageManager.getInstalledApplications(0)
+                .firstOrNull { appInfo ->
+                    val label = appContext.packageManager.getApplicationLabel(appInfo).toString().lowercase()
+                    label.contains(query) || query.contains(label)
+                }?.packageName
+        } catch (_: Exception) { null }
     }
 
     private fun openPlayStore(packageName: String) {
         try {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$packageName")).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$packageName")).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
             appContext.startActivity(intent)
         } catch (_: ActivityNotFoundException) {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$packageName")).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$packageName")).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
             appContext.startActivity(intent)
         }
     }
 
     private fun openPlayStoreSearch(query: String) {
         try {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("market://search?q=${Uri.encode(query)}")).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("market://search?q=${Uri.encode(query)}")).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
             appContext.startActivity(intent)
         } catch (_: ActivityNotFoundException) {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/search?q=${Uri.encode(query)}")).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/search?q=${Uri.encode(query)}")).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
             appContext.startActivity(intent)
         }
     }
 
-    // ── YouTube ─────────────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════
+    // SMS / ALARM / CALENDAR / WEB SEARCH / CONTACTS
+    // ══════════════════════════════════════════════════════════════════════
 
-    private fun launchYouTube(query: String): String {
-        return try {
-            if (query.isNotBlank()) {
-                // Search YouTube for the query
-                val intent = Intent(Intent.ACTION_SEARCH).apply {
-                    component = ComponentName("com.google.android.youtube", "com.google.android.youtube.SearchActivity")
-                    putExtra("query", query)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                try {
-                    appContext.startActivity(intent)
-                    "Searching YouTube for $query."
-                } catch (e: ActivityNotFoundException) {
-                    // Fallback: open YouTube via web URL
-                    val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=${Uri.encode(query)}")).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    appContext.startActivity(webIntent)
-                    "Searching YouTube for $query."
-                }
-            } else {
-                // Just open the YouTube app
-                val launchIntent = appContext.packageManager.getLaunchIntentForPackage("com.google.android.youtube")
-                if (launchIntent != null) {
-                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    appContext.startActivity(launchIntent)
-                    "Opening YouTube."
-                } else {
-                    // YouTube not installed — open web version
-                    val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com")).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    appContext.startActivity(webIntent)
-                    "Opening YouTube in browser."
-                }
-            }
-        } catch (e: Exception) {
-            "I couldn't open YouTube. ${e.message}"
-        }
-    }
-
-    // ── Call ────────────────────────────────────────────────────────────
-
-    private fun launchCall(contactName: String): String {
-        if (contactName.isBlank()) return "Who would you like me to call?"
-
-        return try {
-            // First try to find the contact in the phone's contacts
-            val phoneNumber = lookupContactPhoneNumber(contactName)
-            if (phoneNumber != null) {
-                val callIntent = Intent(Intent.ACTION_CALL).apply {
-                    data = Uri.parse("tel:$phoneNumber")
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                appContext.startActivity(callIntent)
-                "Calling $contactName."
-            } else {
-                // Contact not found — open dialer with the name (Android will try to match)
-                val dialIntent = Intent(Intent.ACTION_DIAL).apply {
-                    data = Uri.parse("tel:${Uri.encode(contactName)}")
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                appContext.startActivity(dialIntent)
-                "I couldn't find $contactName in your contacts. Opening dialer."
-            }
-        } catch (e: SecurityException) {
-            // No CALL_PHONE permission — fall back to dialer
-            try {
-                val dialIntent = Intent(Intent.ACTION_DIAL).apply {
-                    data = Uri.parse("tel:${Uri.encode(contactName)}")
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                appContext.startActivity(dialIntent)
-                "Opening dialer for $contactName. Please grant phone permission to call directly."
-            } catch (e2: Exception) {
-                "I need phone permission to make calls. Please grant the permission in Settings."
-            }
-        } catch (e: Exception) {
-            "I couldn't call $contactName. ${e.message}"
-        }
-    }
-
-    private fun lookupContactPhoneNumber(name: String): String? {
-        return try {
-            var phoneNumber: String? = null
-            val uri = ContactsContract.CommonDataKinds.Phone.CONTENT_URI
-            val projection = arrayOf(
-                ContactsContract.CommonDataKinds.Phone.NUMBER,
-                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME
-            )
-            val selection = "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?"
-            val selectionArgs = arrayOf("%$name%")
-
-            appContext.contentResolver.query(uri, projection, selection, selectionArgs, null)?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    phoneNumber = cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER))
-                }
-            }
-            phoneNumber
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    // ── SMS ──────────────────────────────────────────────────────────────
-
-    private fun launchSms(contactName: String, message: String?): String {
-        if (contactName.isBlank()) return "Who would you like to message?"
-
+    private fun launchSms(contact: String, message: String?): String {
+        if (contact.isBlank()) return "Who would you like to message?"
         return try {
             val smsIntent = Intent(Intent.ACTION_SENDTO).apply {
-                data = Uri.parse("smsto:${Uri.encode(contactName)}")
-                if (message != null) {
-                    putExtra("sms_body", message)
-                }
+                data = Uri.parse("smsto:${Uri.encode(contact)}")
+                if (message != null) putExtra("sms_body", message)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             appContext.startActivity(smsIntent)
-            "Opening message for $contactName."
-        } catch (e: Exception) {
-            "I couldn't open messages for $contactName. ${e.message}"
-        }
+            "Opening message for $contact."
+        } catch (e: Exception) { "Couldn't open messages for $contact. ${e.message}" }
     }
-
-    // ── Alarm ────────────────────────────────────────────────────────────
 
     private fun launchAlarm(time: String?): String {
         return try {
             if (time != null) {
                 val alarmIntent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
                     putExtra(AlarmClock.EXTRA_MESSAGE, "MAHI Alarm")
-                    putExtra(AlarmClock.EXTRA_IS_PM, false)
-                    // Try to parse the time
-                    val timeRegex = Regex("(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm)?", RegexOption.IGNORE_CASE)
-                    val match = timeRegex.find(time)
+                    val match = Regex("(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm)?", RegexOption.IGNORE_CASE).find(time)
                     if (match != null) {
                         var hour = match.groupValues[1].toIntOrNull() ?: 7
                         val minute = match.groupValues[2].toIntOrNull() ?: 0
@@ -641,60 +1046,55 @@ class MahiViewModel @Inject constructor(
                 appContext.startActivity(alarmIntent)
                 "Setting alarm for $time."
             } else {
-                // Just open the alarm app
-                val alarmIntent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
+                val alarmIntent = Intent(AlarmClock.ACTION_SET_ALARM).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
                 appContext.startActivity(alarmIntent)
                 "Opening alarm settings."
             }
-        } catch (e: Exception) {
-            "I couldn't set an alarm. ${e.message}"
-        }
+        } catch (e: Exception) { "Couldn't set alarm. ${e.message}" }
     }
-
-    // ── Calendar ─────────────────────────────────────────────────────────
 
     private fun launchCalendar(): String {
         return try {
-            val calendarIntent = Intent(Intent.ACTION_MAIN).apply {
-                addCategory(Intent.CATEGORY_APP_CALENDAR)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            appContext.startActivity(calendarIntent)
+            val intent = Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_APP_CALENDAR); addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+            appContext.startActivity(intent)
             "Opening calendar."
-        } catch (e: Exception) {
-            "I couldn't open the calendar. ${e.message}"
-        }
+        } catch (e: Exception) { "Couldn't open calendar. ${e.message}" }
     }
-
-    // ── Web Search ───────────────────────────────────────────────────────
 
     private fun launchWebSearch(query: String): String {
-        if (query.isBlank()) return "What would you like me to search for?"
-
+        if (query.isBlank()) return "What would you like to search for?"
         return try {
-            val searchIntent = Intent(Intent.ACTION_WEB_SEARCH).apply {
-                putExtra("query", query)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            appContext.startActivity(searchIntent)
+            val intent = Intent(Intent.ACTION_WEB_SEARCH).apply { putExtra("query", query); addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+            appContext.startActivity(intent)
             "Searching for $query."
         } catch (e: Exception) {
-            // Fallback to opening in browser
             try {
-                val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=${Uri.encode(query)}")).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
+                val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=${Uri.encode(query)}")).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
                 appContext.startActivity(webIntent)
                 "Searching Google for $query."
-            } catch (e2: Exception) {
-                "I couldn't search for that. ${e2.message}"
-            }
+            } catch (e2: Exception) { "Couldn't search for that. ${e2.message}" }
         }
     }
 
-    // ── Device Control ──────────────────────────────────────────────────
+    private fun lookupContactPhoneNumber(name: String): String? {
+        return try {
+            var phoneNumber: String? = null
+            val uri = ContactsContract.CommonDataKinds.Phone.CONTENT_URI
+            val projection = arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER, ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
+            val selection = "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?"
+            val selectionArgs = arrayOf("%$name%")
+            appContext.contentResolver.query(uri, projection, selection, selectionArgs, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    phoneNumber = cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER))
+                }
+            }
+            phoneNumber
+        } catch (_: Exception) { null }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // DEVICE CONTROL / ROUTINE / NOTIFICATION
+    // ══════════════════════════════════════════════════════════════════════
 
     private suspend fun handleDeviceControl(intent: IntentClassifier.IntentResult): String {
         val action = intent.action ?: return "I couldn't understand which device to control."
@@ -706,78 +1106,11 @@ class MahiViewModel @Inject constructor(
         val result = deviceControlManager.toggle(device, if (turnOn) 1 else 0)
         refreshDeviceState()
         return if (result.isSuccess) {
-            intent.response ?: "${device.replace("_", " ").replaceFirstChar { it.uppercase() }} ${if (turnOn) "enabled" else "disabled"}."
+            "${device.replace("_", " ").replaceFirstChar { it.uppercase() }} ${if (turnOn) "enabled" else "disabled"}."
         } else {
             "Couldn't ${if (turnOn) "enable" else "disable"} ${device.replace("_", " ")}. Check permissions."
         }
     }
-
-    // ── Weather ──────────────────────────────────────────────────────────
-
-    private suspend fun fetchWeather(city: String): String {
-        _weatherState.value = _weatherState.value.copy(isLoading = true)
-        return try {
-            val weatherApiKey = settingsManager.getWeatherApiKey()
-            if (weatherApiKey.isBlank()) {
-                _weatherState.value = _weatherState.value.copy(isLoading = false)
-                return "Weather API key not set. Please add your OpenWeatherMap API key in Settings."
-            }
-            val weather = WeatherClient.instance.getCurrentWeather(city, weatherApiKey, "metric")
-            _weatherState.value = WeatherUiState(
-                city = weather.name ?: city,
-                temperature = weather.main?.temp ?: 0.0,
-                description = weather.weather?.firstOrNull()?.description ?: "",
-                humidity = weather.main?.humidity ?: 0,
-                windSpeed = weather.wind?.speed ?: 0.0,
-                pressure = weather.main?.pressure ?: 0,
-                feelsLike = weather.main?.feelsLike ?: 0.0,
-                icon = weather.weather?.firstOrNull()?.icon ?: "",
-                isLoading = false
-            )
-            navigateTo("weather")
-            "Weather in ${weather.name ?: city}: ${(weather.main?.temp ?: 0.0).toInt()} degrees, ${weather.weather?.firstOrNull()?.description ?: "clear"}. Humidity ${weather.main?.humidity ?: 0}%. Feels like ${(weather.main?.feelsLike ?: 0.0).toInt()} degrees."
-        } catch (e: retrofit2.HttpException) {
-            _weatherState.value = _weatherState.value.copy(isLoading = false, error = e.message)
-            when (e.code()) {
-                401 -> "Weather API key seems invalid. Please check your OpenWeatherMap API key in Settings."
-                404 -> "City not found. Try specifying a different city name."
-                else -> "Couldn't fetch weather for $city. Error: ${e.code()}"
-            }
-        } catch (e: Exception) {
-            _weatherState.value = _weatherState.value.copy(isLoading = false, error = e.message)
-            "Couldn't fetch weather for $city. Please check your internet connection."
-        }
-    }
-
-    // ── News ──────────────────────────────────────────────────────────────
-
-    private suspend fun fetchNews(category: String): String {
-        _newsState.value = _newsState.value.copy(isLoading = true, selectedCategory = category)
-        return try {
-            val newsApiKey = settingsManager.getNewsApiKey()
-            if (newsApiKey.isBlank()) {
-                _newsState.value = _newsState.value.copy(isLoading = false)
-                return "News API key not set. Please add your GNews API key in Settings."
-            }
-            val news = NewsClient.instance.getTopHeadlines(category = category, lang = "en", token = newsApiKey)
-            _newsState.value = NewsUiState(articles = news.articles ?: emptyList(), isLoading = false, selectedCategory = category)
-            navigateTo("news")
-            if (news.articles.isNullOrEmpty()) "No news articles found at the moment."
-            else "Top headlines: ${news.articles.take(3).mapIndexed { i, a -> "${i + 1}. ${a.title ?: "Untitled"}" }.joinToString(". ")}"
-        } catch (e: retrofit2.HttpException) {
-            _newsState.value = _newsState.value.copy(isLoading = false, error = e.message)
-            when (e.code()) {
-                401 -> "News API key seems invalid. Please check your GNews API key in Settings."
-                403 -> "News API access denied. Your API key may have expired."
-                else -> "Couldn't fetch news. Error: ${e.code()}"
-            }
-        } catch (e: Exception) {
-            _newsState.value = _newsState.value.copy(isLoading = false, error = e.message)
-            "Couldn't fetch news. Please check your internet connection."
-        }
-    }
-
-    // ── Routine ──────────────────────────────────────────────────────────
 
     private suspend fun executeRoutine(name: String?): String {
         if (name == null) return "No routine specified."
@@ -785,10 +1118,8 @@ class MahiViewModel @Inject constructor(
             routineEngine.executeRoutine(name)
             navigateTo("routines")
             "${name.replace("_", " ").replaceFirstChar { it.uppercase() }} routine activated."
-        } catch (e: Exception) { "Couldn't execute $name routine. ${e.message}" }
+        } catch (e: Exception) { "Couldn't execute routine. ${e.message}" }
     }
-
-    // ── Notifications ────────────────────────────────────────────────────
 
     private fun readNotifications(): String {
         val notifs = _notifications.value.take(5)
@@ -796,7 +1127,9 @@ class MahiViewModel @Inject constructor(
         else "Recent notifications: ${notifs.mapIndexed { i, n -> "${i + 1}. ${n.appName}: ${n.title}" }.joinToString(". ")}"
     }
 
-    // ── AI Response (fallback for general chat) ──────────────────────────
+    // ══════════════════════════════════════════════════════════════════════
+    // AI FALLBACK — General Chat
+    // ══════════════════════════════════════════════════════════════════════
 
     private suspend fun fetchAiResponse(input: String): String {
         navigateTo("chat")
@@ -806,11 +1139,13 @@ class MahiViewModel @Inject constructor(
             }
             aiEngine.sendMessage(input, history)
         } catch (e: Exception) {
-            "I'm having trouble connecting right now. Please check your internet connection and try again."
+            "I'm having trouble connecting right now. Please check your internet connection."
         }
     }
 
-    // ── Device Control UI ────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════
+    // DEVICE STATE UI
+    // ══════════════════════════════════════════════════════════════════════
 
     fun toggleDevice(deviceName: String) {
         viewModelScope.launch {
