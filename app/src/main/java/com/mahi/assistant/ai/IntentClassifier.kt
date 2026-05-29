@@ -7,7 +7,7 @@ package com.mahi.assistant.ai
  *
  * Supported intent types cover the most common voice assistant commands:
  * device control, weather, news, YouTube, calls, SMS, alarms, routines,
- * calendar, and notifications. Unrecognized input defaults to GENERAL_CHAT.
+ * calendar, notifications, and app launching. Unrecognized input defaults to GENERAL_CHAT.
  */
 class IntentClassifier(
     private val aiEngine: AiConversationEngine? = null
@@ -24,6 +24,8 @@ class IntentClassifier(
         ROUTINE,
         CALENDAR,
         NOTIFICATION,
+        APP_LAUNCH,
+        WEB_SEARCH,
         GENERAL_CHAT
     }
 
@@ -46,6 +48,40 @@ class IntentClassifier(
     )
 
     private val intentPatterns: List<IntentPattern> = listOf(
+
+        // ── APP_LAUNCH ────────────────────────────────────────────────────────
+        // This MUST be checked BEFORE CALL/SMS because "open whatsapp" should
+        // launch the app, not try to call someone named "whatsapp".
+
+        IntentPattern(
+            type = IntentType.APP_LAUNCH,
+            action = "open_app",
+            patterns = listOf(
+                Regex("(?i)\\bopen\\s+(.+)\\b"),
+                Regex("(?i)\\blaunch\\s+(.+)\\b"),
+                Regex("(?i)\\bstart\\s+(?:the\\s+)?(.+?)\\s+app\\b"),
+                Regex("(?i)\\brun\\s+(.+)\\b")
+            ),
+            paramExtractor = { _, input ->
+                val appPatterns = listOf(
+                    Regex("(?i)\\bopen\\s+(.+)\\b"),
+                    Regex("(?i)\\blaunch\\s+(.+)\\b"),
+                    Regex("(?i)\\bstart\\s+(?:the\\s+)?(.+?)\\s+app\\b"),
+                    Regex("(?i)\\brun\\s+(.+)\\b")
+                )
+                for (pattern in appPatterns) {
+                    val match = pattern.find(input)
+                    if (match != null) {
+                        val appName = match.groupValues[1].trim().lowercase()
+                        // Filter out non-app words that shouldn't be treated as app launches
+                        if (appName !in listOf("the door", "the window", "my eyes", "up", "it", "that", "this", "the app")) {
+                            return@IntentPattern mapOf("app" to appName)
+                        }
+                    }
+                }
+                emptyMap()
+            }
+        ),
 
         // ── DEVICE_CONTROL ────────────────────────────────────────────────────
 
@@ -168,10 +204,17 @@ class IntentClassifier(
             patterns = listOf(
                 Regex("(?i)\\bwhat'?s\\s+(?:the\\s+)?weather\\b"),
                 Regex("(?i)\\bhow'?s\\s+(?:the\\s+)?weather\\b"),
-                Regex("(?i)\\bweather\\s+(?:today|tomorrow|right now|outside)\\b"),
+                Regex("(?i)\\bweather\\s+(?:today|tomorrow|right now|outside|update)\\b"),
                 Regex("(?i)\\b(?:is\\s+it|will\\s+it\\s+be)\\s+(?:hot|cold|rainy|sunny|warm|cool)\\b"),
                 Regex("(?i)\\btemperature\\s+(?:today|tomorrow|outside|right now)\\b"),
-                Regex("(?i)\\bweather\\s+in\\s+(.+)\\b")
+                Regex("(?i)\\bweather\\s+in\\s+(.+)\\b"),
+                Regex("(?i)\\btell\\s+(?:me\\s+)?(?:about\\s+)?(?:today'?s?|the|this)\\s+weather\\b"),
+                Regex("(?i)\\b(?:today'?s|current)\\s+weather\\b"),
+                Regex("(?i)\\bweather\\s+(?:report|forecast|info|update|conditions)\\b"),
+                Regex("(?i)\\bhow\\s+(?:hot|cold|warm)\\s+(?:is\\s+it|outside)\\b"),
+                Regex("(?i)\\brain\\s+(?:today|tomorrow|chance|forecast)\\b"),
+                Regex("(?i)\\bwill\\s+it\\s+rain\\b"),
+                Regex("(?i)\\bdo\\s+i\\s+need\\s+(?:an\\s+)?umbrella\\b")
             ),
             paramExtractor = { match, input ->
                 val cityMatch = Regex("(?i)\\bweather\\s+in\\s+(.+)\\b").find(input)
@@ -191,10 +234,16 @@ class IntentClassifier(
             patterns = listOf(
                 Regex("(?i)\\bshow\\s+(?:me\\s+)?(?:the\\s+)?news\\b"),
                 Regex("(?i)\\bwhat'?s\\s+(?:the\\s+)?news\\b"),
-                Regex("(?i)\\b(?:latest|recent|today'?s)\\s+news\\b"),
+                Regex("(?i)\\b(?:latest|recent|today'?s|current|breaking)\\s+news\\b"),
                 Regex("(?i)\\bread\\s+(?:me\\s+)?(?:the\\s+)?news\\b"),
                 Regex("(?i)\\bnews\\s+(?:about|on)\\s+(.+)\\b"),
-                Regex("(?i)\\bheadlines\\b")
+                Regex("(?i)\\bheadlines\\b"),
+                Regex("(?i)\\bwhat'?s\\s+(?:the\\s+)?(?:latest|breaking|current)\\s+(?:news|headlines)\\b"),
+                Regex("(?i)\\bwhat'?s\\s+breaking\\b"),
+                Regex("(?i)\\bbreaking\\s+(?:news|headlines|stories)\\b"),
+                Regex("(?i)\\b(?:tell|give)\\s+(?:me\\s+)?(?:the\\s+)?(?:latest\\s+)?news\\b"),
+                Regex("(?i)\\bnews\\s+update\\b"),
+                Regex("(?i)\\bwhat\\s+happened\\s+(?:today|in\\s+(?:the\\s+)?news)\\b")
             ),
             paramExtractor = { _, input ->
                 val topicMatch = Regex("(?i)\\bnews\\s+(?:about|on)\\s+(.+)\\b").find(input)
@@ -217,7 +266,11 @@ class IntentClassifier(
                 Regex("(?i)\\byoutube\\s+(?:search|play)\\s+(.+)\\b"),
                 Regex("(?i)\\bplay\\s+(.+)\\s+on\\s+youtube\\b"),
                 Regex("(?i)\\bwatch\\s+(.+)\\s+on\\s+youtube\\b"),
-                Regex("(?i)\\bfind\\s+(.+)\\s+on\\s+youtube\\b")
+                Regex("(?i)\\bfind\\s+(.+)\\s+on\\s+youtube\\b"),
+                Regex("(?i)\\bopen\\s+youtube\\b"),
+                Regex("(?i)\\blaunch\\s+youtube\\b"),
+                Regex("(?i)\\bstart\\s+youtube\\b"),
+                Regex("(?i)\\byoutube\\b")
             ),
             paramExtractor = { _, input ->
                 val queryPatterns = listOf(
@@ -234,7 +287,8 @@ class IntentClassifier(
                         return@IntentPattern mapOf("query" to match.groupValues[1].trim())
                     }
                 }
-                emptyMap()
+                // Just "open youtube" — no search query
+                mapOf("query" to "")
             }
         ),
 
@@ -282,10 +336,10 @@ class IntentClassifier(
             ),
             paramExtractor = { _, input ->
                 val contactPatterns = listOf(
-                    Regex("(?i)\\bsend\\s+(?:a\\s+)?(?:sms|text|message)\\s+to\\s+(.+?)(?:\\s+that\\s+|\$)\\b"),
-                    Regex("(?i)\\btext\\s+(.+?)(?:\\s+that\\s+|\$)\\b"),
-                    Regex("(?i)\\bsms\\s+(.+?)(?:\\s+that\\s+|\$)\\b"),
-                    Regex("(?i)\\bsend\\s+(?:a\\s+)?message\\s+to\\s+(.+?)(?:\\s+that\\s+|\$)\\b"),
+                    Regex("(?i)\\bsend\\s+(?:a\\s+)?(?:sms|text|message)\\s+to\\s+(.+?)(?:\\s+that\\s+|$)\\b"),
+                    Regex("(?i)\\btext\\s+(.+?)(?:\\s+that\\s+|$)\\b"),
+                    Regex("(?i)\\bsms\\s+(.+?)(?:\\s+that\\s+|$)\\b"),
+                    Regex("(?i)\\bsend\\s+(?:a\\s+)?message\\s+to\\s+(.+?)(?:\\s+that\\s+|$)\\b"),
                     Regex("(?i)\\bmessage\\s+(.+)\\s+that\\s+(.+)\\b")
                 )
                 for (pattern in contactPatterns) {
@@ -401,6 +455,50 @@ class IntentClassifier(
                 Regex("(?i)\\bshow\\s+(?:me\\s+)?(?:my\\s+)?notifications?\\b"),
                 Regex("(?i)\\bdo\\s+i\\s+have\\s+(?:any\\s+)?notifications?\\b")
             )
+        ),
+
+        // ── WEB_SEARCH ────────────────────────────────────────────────────────
+
+        IntentPattern(
+            type = IntentType.WEB_SEARCH,
+            action = "web_search",
+            patterns = listOf(
+                Regex("(?i)\\bsearch\\s+(?:for\\s+)?(.+)\\b"),
+                Regex("(?i)\\bgoogle\\s+(.+)\\b"),
+                Regex("(?i)\\blook\\s+up\\s+(.+)\\b"),
+                Regex("(?i)\\bfind\\s+(?:out\\s+)?(?:about\\s+)?(.+)\\b"),
+                Regex("(?i)\\bwho\\s+is\\s+(.+)\\b"),
+                Regex("(?i)\\bwhat\\s+is\\s+(.+)\\b"),
+                Regex("(?i)\\bwhen\\s+(?:is|was|did|will)\\s+(.+)\\b"),
+                Regex("(?i)\\bwhere\\s+(?:is|are|was|were)\\s+(.+)\\b"),
+                Regex("(?i)\\bhow\\s+(?:to|do|does|many|much|old|far|long)\\s+(.+)\\b"),
+                Regex("(?i)\\bwhy\\s+(?:is|are|was|were|do|does|did)\\s+(.+)\\b"),
+                Regex("(?i)\\b(?:ipl|cricket|football|match)\\s+(?:match|score|today|live)?\\b"),
+                Regex("(?i)\\b(?:today'?s?|current)\\s+(?:match|score)\\b")
+            ),
+            paramExtractor = { _, input ->
+                val searchPatterns = listOf(
+                    Regex("(?i)\\bsearch\\s+(?:for\\s+)?(.+)\\b"),
+                    Regex("(?i)\\bgoogle\\s+(.+)\\b"),
+                    Regex("(?i)\\blook\\s+up\\s+(.+)\\b"),
+                    Regex("(?i)\\bfind\\s+(?:out\\s+)?(?:about\\s+)?(.+)\\b"),
+                    Regex("(?i)\\bwho\\s+is\\s+(.+)\\b"),
+                    Regex("(?i)\\bwhat\\s+is\\s+(.+)\\b"),
+                    Regex("(?i)\\bwhen\\s+(?:is|was|did|will)\\s+(.+)\\b"),
+                    Regex("(?i)\\bwhere\\s+(?:is|are|was|were)\\s+(.+)\\b"),
+                    Regex("(?i)\\bhow\\s+(?:to|do|does|many|much|old|far|long)\\s+(.+)\\b"),
+                    Regex("(?i)\\bwhy\\s+(?:is|are|was|were|do|does|did)\\s+(.+)\\b"),
+                    Regex("(?i)\\b(?:ipl|cricket|football)\\s+(?:match|score|today|live)?\\b")
+                )
+                for (pattern in searchPatterns) {
+                    val match = pattern.find(input)
+                    if (match != null && match.groupValues[1].isNotBlank()) {
+                        return@IntentPattern mapOf("query" to match.groupValues[1].trim())
+                    }
+                }
+                // Fallback: use the whole input as query
+                mapOf("query" to input.trim())
+            }
         )
     )
 

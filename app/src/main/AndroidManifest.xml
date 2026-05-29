@@ -37,6 +37,9 @@
     <!-- Alarm -->
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
 
+    <!-- Query installed apps (Android 11+) -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="QueryAllPackagesPermission" />
+
     <!-- System -->
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
@@ -65,6 +68,48 @@
     <uses-feature
         android:name="android.hardware.wifi"
         android:required="false" />
+
+    <!-- Declare packages we want to query/launch -->
+    <queries>
+        <package android:name="com.google.android.youtube" />
+        <package android:name="com.whatsapp" />
+        <package android:name="com.instagram.android" />
+        <package android:name="com.facebook.katana" />
+        <package android:name="com.twitter.android" />
+        <package android:name="org.telegram.messenger" />
+        <package android:name="com.snapchat.android" />
+        <package android:name="com.zhiliaoapp.musically" />
+        <package android:name="com.spotify.music" />
+        <package android:name="com.google.android.gm" />
+        <package android:name="com.android.chrome" />
+        <package android:name="com.google.android.apps.maps" />
+        <package android:name="com.android.camera" />
+        <package android:name="com.android.dialer" />
+        <package android:name="com.android.contacts" />
+        <package android:name="com.android.settings" />
+        <package android:name="com.android.vending" />
+        <package android:name="com.netflix.mediaclient" />
+        <package android:name="com.amazon.mShop.android.shopping" />
+        <package android:name="com.flipkart.android" />
+        <package android:name="in.swiggy.android" />
+        <package android:name="com.application.zomato" />
+        <package android:name="net.one97.paytm" />
+        <package android:name="com.google.android.apps.nbu.paisa.user" />
+        <package android:name="com.phonepe.app" />
+        <package android:name="com.google.android.apps.photos" />
+        <package android:name="com.google.android.keep" />
+        <package android:name="com.linkedin.android" />
+        <package android:name="com.reddit.frontpage" />
+        <package android:name="com.pinterest" />
+        <package android:name="com.discord" />
+        <intent>
+            <action android:name="android.intent.action.WEB_SEARCH" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
+    </queries>
 
     <application
         android:name=".MahiApplication"

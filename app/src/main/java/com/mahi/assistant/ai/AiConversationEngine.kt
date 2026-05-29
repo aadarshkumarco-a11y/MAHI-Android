@@ -14,11 +14,12 @@ import com.google.gson.GsonBuilder
 
 /**
  * AiConversationEngine manages the full conversation lifecycle with the
- * Gemini 1.5 Flash API. It handles:
+ * Gemini API. It handles:
  * - API key retrieval from SettingsManager (SharedPreferences)
  * - Conversation history management
  * - System prompt configuration (MAHI persona)
- * - Error handling and retry logic
+ * - Automatic model fallback (tries gemini-2.0-flash → gemini-1.5-flash → gemini-pro)
+ * - Error handling with user-friendly messages
  * - Loading state exposure via StateFlow
  */
 class AiConversationEngine(
@@ -29,6 +30,14 @@ class AiConversationEngine(
 
     companion object {
         private const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta/"
+
+        // Models to try in order — newer/faster first
+        val MODEL_ENDPOINTS = listOf(
+            "models/gemini-2.0-flash:generateContent",
+            "models/gemini-1.5-flash:generateContent",
+            "models/gemini-1.5-flash-latest:generateContent",
+            "models/gemini-pro:generateContent"
+        )
 
         val SYSTEM_PROMPT = """
             You are MAHI, an ultra-intelligent AI assistant inspired by Jarvis from Iron Man.
@@ -59,6 +68,9 @@ class AiConversationEngine(
     private val _conversationHistory = MutableStateFlow<List<ChatMessage>>(emptyList())
     val conversationHistory: StateFlow<List<ChatMessage>> = _conversationHistory.asStateFlow()
 
+    // Remember which model worked last time to skip straight to it
+    private var lastWorkingEndpoint: String? = null
+
     /**
      * Retrieve the stored Gemini API key from SettingsManager.
      */
@@ -80,6 +92,69 @@ class AiConversationEngine(
         val current = _conversationHistory.value.toMutableList()
         current.add(message)
         _conversationHistory.value = current
+    }
+
+    /**
+     * Try calling the Gemini API with multiple model endpoints as fallback.
+     * Returns the response text on success, or null if all endpoints fail.
+     */
+    private suspend fun callGeminiApi(
+        apiKey: String,
+        request: GeminiRequest
+    ): Pair<GeminiResponse?, String?> {
+        // Try the last working endpoint first
+        val endpoints = mutableListOf<String>()
+        lastWorkingEndpoint?.let { endpoints.add(it) }
+        MODEL_ENDPOINTS.forEach { ep ->
+            if (ep !in endpoints) endpoints.add(ep)
+        }
+
+        var lastErrorCode: Int? = null
+        var lastErrorMsg: String? = null
+
+        for (endpoint in endpoints) {
+            try {
+                val response = apiService.generateContent(endpoint, apiKey, request)
+                lastWorkingEndpoint = endpoint // Remember what worked
+                return Pair(response, null)
+            } catch (e: HttpException) {
+                lastErrorCode = e.code()
+                lastErrorMsg = e.message()
+                // If it's a 404, try the next model endpoint
+                if (e.code() == 404) continue
+                // For other errors (401, 403, 429), don't bother trying other models
+                return Pair(null, formatHttpError(e.code(), e.message()))
+            } catch (e: Exception) {
+                lastErrorMsg = e.message
+                // Non-HTTP error — probably network issue, no point trying other models
+                return Pair(null, formatExceptionError(e))
+            }
+        }
+
+        // All model endpoints returned 404
+        return Pair(null, "Gemini AI is currently unavailable. Your API key might be invalid or the service might be down. Please check your Gemini API key in Settings. (Error: ${lastErrorCode ?: "unknown"})")
+    }
+
+    private fun formatHttpError(code: Int, message: String?): String {
+        return when (code) {
+            400 -> "Bad request to Gemini API. Please try rephrasing your question."
+            401 -> "Your Gemini API key appears to be invalid. Please update it in Settings. Keys should start with 'AIza'."
+            403 -> "Access to Gemini API denied. Please check your API key permissions in Google AI Studio."
+            404 -> "The Gemini model endpoint was not found. This might mean your API key is invalid."
+            429 -> "Gemini API rate limit reached. Please wait a moment and try again."
+            500 -> "Gemini server error. Please try again in a few seconds."
+            503 -> "Gemini service is temporarily unavailable. Please try again later."
+            else -> "Connection error ($code). Please check your internet and try again."
+        }
+    }
+
+    private fun formatExceptionError(e: Exception): String {
+        return when (e) {
+            is java.net.UnknownHostException -> "No internet connection. Please check your network."
+            is java.net.SocketTimeoutException -> "Request timed out. Please try again."
+            is java.net.ConnectException -> "Cannot connect to Gemini. Please check your internet."
+            else -> "Connection error. Please check your internet and try again."
+        }
     }
 
     /**
@@ -126,11 +201,21 @@ class AiConversationEngine(
                 generationConfig = generationConfig
             )
 
-            // Make the API call
-            val response = apiService.generateContent(
-                apiKey = apiKey,
-                request = request
-            )
+            // Make the API call with model fallback
+            val (response, error) = callGeminiApi(apiKey, request)
+
+            if (error != null) {
+                _lastError.value = error
+                _isLoading.value = false
+                return error
+            }
+
+            if (response == null) {
+                val errorMsg = "No response from Gemini. Please try again."
+                _lastError.value = errorMsg
+                _isLoading.value = false
+                return errorMsg
+            }
 
             // Extract the response text
             val responseText = response.extractText()
@@ -155,34 +240,8 @@ class AiConversationEngine(
             _isLoading.value = false
             return responseText
 
-        } catch (e: HttpException) {
-            val errorMsg = when (e.code()) {
-                400 -> "Bad request. Please check your input."
-                401 -> "Invalid API key. Please update your Gemini API key in Settings."
-                403 -> "Access forbidden. Check your API key permissions."
-                429 -> "Rate limit exceeded. Please wait and try again."
-                500 -> "Gemini server error. Please try again later."
-                503 -> "Gemini service unavailable. Please try again later."
-                else -> "Network error (${e.code()}): ${e.message()}"
-            }
-            _lastError.value = errorMsg
-            _isLoading.value = false
-            return errorMsg
-
-        } catch (e: java.net.UnknownHostException) {
-            val errorMsg = "No internet connection. Please check your network."
-            _lastError.value = errorMsg
-            _isLoading.value = false
-            return errorMsg
-
-        } catch (e: java.net.SocketTimeoutException) {
-            val errorMsg = "Request timed out. Please try again."
-            _lastError.value = errorMsg
-            _isLoading.value = false
-            return errorMsg
-
         } catch (e: Exception) {
-            val errorMsg = "Error: ${e.message ?: "Unknown error"}"
+            val errorMsg = formatExceptionError(e)
             _lastError.value = errorMsg
             _isLoading.value = false
             return errorMsg
@@ -220,17 +279,15 @@ class AiConversationEngine(
                 )
             )
 
-            val response = apiService.generateContent(
-                apiKey = apiKey,
-                request = request
-            )
+            val (response, error) = callGeminiApi(apiKey, request)
 
             _isLoading.value = false
-            response.extractText() ?: "No response generated."
+            if (error != null) return error
+            return response?.extractText() ?: "No response generated."
 
         } catch (e: Exception) {
             _isLoading.value = false
-            "Error: ${e.message}"
+            formatExceptionError(e)
         }
     }
 }

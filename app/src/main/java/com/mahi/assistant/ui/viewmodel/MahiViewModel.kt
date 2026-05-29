@@ -1,8 +1,13 @@
 package com.mahi.assistant.ui.viewmodel
 
+import android.content.ActivityNotFoundException
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.AlarmClock
+import android.provider.ContactsContract
+import android.provider.Settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mahi.assistant.ai.AiConversationEngine
@@ -25,6 +30,7 @@ import com.mahi.assistant.service.MahiNotificationListenerService
 import com.mahi.assistant.voice.TextToSpeechEngine
 import com.mahi.assistant.voice.VoiceRecognitionEngine
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -82,6 +88,7 @@ data class SettingsUiState(
 
 @HiltViewModel
 class MahiViewModel @Inject constructor(
+    @ApplicationContext private val appContext: Context,
     private val aiEngine: AiConversationEngine,
     private val intentClassifier: IntentClassifier,
     private val deviceControlManager: DeviceControlManager,
@@ -132,6 +139,56 @@ class MahiViewModel @Inject constructor(
     val welcomeMessage: StateFlow<String?> = _welcomeMessage.asStateFlow()
 
     private var processingJob: Job? = null
+
+    // ── Known app package names for APP_LAUNCH ───────────────────────────────
+
+    private val appPackageMap = mapOf(
+        "youtube" to "com.google.android.youtube",
+        "whatsapp" to "com.whatsapp",
+        "instagram" to "com.instagram.android",
+        "facebook" to "com.facebook.katana",
+        "twitter" to "com.twitter.android",
+        "x" to "com.twitter.android",
+        "telegram" to "org.telegram.messenger",
+        "snapchat" to "com.snapchat.android",
+        "tiktok" to "com.zhiliaoapp.musically",
+        "spotify" to "com.spotify.music",
+        "gmail" to "com.google.android.gm",
+        "google" to "com.google.android.googlequicksearchbox",
+        "chrome" to "com.android.chrome",
+        "maps" to "com.google.android.apps.maps",
+        "google maps" to "com.google.android.apps.maps",
+        "camera" to "com.android.camera",
+        "phone" to "com.android.dialer",
+        "dialer" to "com.android.dialer",
+        "contacts" to "com.android.contacts",
+        "settings" to "com.android.settings",
+        "calculator" to "com.android.calculator2",
+        "clock" to "com.android.deskclock",
+        "calendar" to "com.android.calendar",
+        "play store" to "com.android.vending",
+        "play music" to "com.google.android.music",
+        "netflix" to "com.netflix.mediaclient",
+        "amazon" to "com.amazon.mShop.android.shopping",
+        "flipkart" to "com.flipkart.android",
+        "swiggy" to "in.swiggy.android",
+        "zomato" to "com.application.zomato",
+        "paytm" to "net.one97.paytm",
+        "gpay" to "com.google.android.apps.nbu.paisa.user",
+        "google pay" to "com.google.android.apps.nbu.paisa.user",
+        "phonepe" to "com.phonepe.app",
+        "files" to "com.google.android.apps.nbu.files",
+        "gallery" to "com.android.gallery3d",
+        "photos" to "com.google.android.apps.photos",
+        "notes" to "com.google.android.keep",
+        "keep" to "com.google.android.keep",
+        "meet" to "com.google.android.apps.meetings",
+        "zoom" to "us.zoom.videomeetings",
+        "linkedin" to "com.linkedin.android",
+        "reddit" to "com.reddit.frontpage",
+        "pinterest" to "com.pinterest",
+        "discord" to "com.discord"
+    )
 
     init {
         // Load saved messages (defensive — Room might not be ready)
@@ -306,7 +363,9 @@ class MahiViewModel @Inject constructor(
             // Save user message
             val userMessage = ChatMessage(role = MessageRole.USER, content = input)
             _messages.value = _messages.value + userMessage
-            messageDao.insert(MessageEntity(role = "USER", content = input, timestamp = System.currentTimeMillis()))
+            try {
+                messageDao.insert(MessageEntity(role = "USER", content = input, timestamp = System.currentTimeMillis()))
+            } catch (_: Exception) { }
 
             // Classify intent and handle
             val intent = intentClassifier.classifySync(input)
@@ -315,7 +374,9 @@ class MahiViewModel @Inject constructor(
             // Save assistant message
             val assistantMessage = ChatMessage(role = MessageRole.ASSISTANT, content = response)
             _messages.value = _messages.value + assistantMessage
-            messageDao.insert(MessageEntity(role = "ASSISTANT", content = response, timestamp = System.currentTimeMillis()))
+            try {
+                messageDao.insert(MessageEntity(role = "ASSISTANT", content = response, timestamp = System.currentTimeMillis()))
+            } catch (_: Exception) { }
 
             // Speak the response
             val speechText = response.replace(Regex("\\[\\w+\\]\\s*"), "").replace(Regex("[\\*#_]"), "").take(500)
@@ -328,16 +389,312 @@ class MahiViewModel @Inject constructor(
             IntentClassifier.IntentType.DEVICE_CONTROL -> handleDeviceControl(intent)
             IntentClassifier.IntentType.WEATHER -> fetchWeather(intent.params["city"] ?: "New Delhi")
             IntentClassifier.IntentType.NEWS -> fetchNews(intent.params["category"] ?: "general")
-            IntentClassifier.IntentType.YOUTUBE -> "Launching YouTube search for ${intent.params["query"] ?: originalInput}."
-            IntentClassifier.IntentType.CALL -> "Initiating call to ${intent.params["contact"] ?: "unknown"}. Please confirm."
-            IntentClassifier.IntentType.SMS -> "Opening SMS app for confirmation."
-            IntentClassifier.IntentType.ALARM -> "Setting alarm for ${intent.params["time"] ?: "requested time"}."
+            IntentClassifier.IntentType.YOUTUBE -> launchYouTube(intent.params["query"] ?: "")
+            IntentClassifier.IntentType.CALL -> launchCall(intent.params["contact"] ?: "")
+            IntentClassifier.IntentType.SMS -> launchSms(intent.params["contact"] ?: "", intent.params["message"])
+            IntentClassifier.IntentType.ALARM -> launchAlarm(intent.params["time"])
             IntentClassifier.IntentType.ROUTINE -> executeRoutine(intent.action)
             IntentClassifier.IntentType.NOTIFICATION -> readNotifications()
-            IntentClassifier.IntentType.CALENDAR -> "Opening calendar app."
+            IntentClassifier.IntentType.CALENDAR -> launchCalendar()
+            IntentClassifier.IntentType.APP_LAUNCH -> launchApp(intent.params["app"] ?: "")
+            IntentClassifier.IntentType.WEB_SEARCH -> launchWebSearch(intent.params["query"] ?: originalInput)
             else -> fetchAiResponse(originalInput)
         }
     }
+
+    // ── App Launch ──────────────────────────────────────────────────────
+
+    private fun launchApp(appName: String): String {
+        if (appName.isBlank()) return "Which app would you like me to open?"
+
+        val packageName = appPackageMap[appName.lowercase().trim()]
+
+        return try {
+            if (packageName != null) {
+                // Known app — launch directly
+                val launchIntent = appContext.packageManager.getLaunchIntentForPackage(packageName)
+                if (launchIntent != null) {
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    appContext.startActivity(launchIntent)
+                    "Opening ${appName.replaceFirstChar { it.uppercase() }}."
+                } else {
+                    // App installed but no launch intent — open Play Store
+                    openPlayStore(packageName)
+                    "${appName.replaceFirstChar { it.uppercase() }} can't be opened directly. Opening Play Store."
+                }
+            } else {
+                // Unknown app name — try to find it by searching package manager
+                val foundPackage = findPackageByAppName(appName)
+                if (foundPackage != null) {
+                    val launchIntent = appContext.packageManager.getLaunchIntentForPackage(foundPackage)
+                    if (launchIntent != null) {
+                        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        appContext.startActivity(launchIntent)
+                        "Opening ${appName.replaceFirstChar { it.uppercase() }}."
+                    } else {
+                        openPlayStore(foundPackage)
+                        "Opening ${appName.replaceFirstChar { it.uppercase() }}."
+                    }
+                } else {
+                    // Not found — search Play Store
+                    openPlayStoreSearch(appName)
+                    "I couldn't find ${appName.replaceFirstChar { it.uppercase() }} on your device. Searching Play Store."
+                }
+            }
+        } catch (e: ActivityNotFoundException) {
+            openPlayStoreSearch(appName)
+            "Opening Play Store to find ${appName.replaceFirstChar { it.uppercase() }}."
+        } catch (e: Exception) {
+            "I couldn't open ${appName.replaceFirstChar { it.uppercase() }}. ${e.message}"
+        }
+    }
+
+    private fun findPackageByAppName(appName: String): String? {
+        return try {
+            val query = appName.lowercase().trim()
+            val packages = appContext.packageManager.getInstalledApplications(0)
+            packages.firstOrNull { appInfo ->
+                val label = appContext.packageManager.getApplicationLabel(appInfo).toString().lowercase()
+                label.contains(query) || query.contains(label)
+            }?.packageName
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun openPlayStore(packageName: String) {
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$packageName")).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            appContext.startActivity(intent)
+        } catch (_: ActivityNotFoundException) {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$packageName")).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            appContext.startActivity(intent)
+        }
+    }
+
+    private fun openPlayStoreSearch(query: String) {
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("market://search?q=${Uri.encode(query)}")).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            appContext.startActivity(intent)
+        } catch (_: ActivityNotFoundException) {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/search?q=${Uri.encode(query)}")).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            appContext.startActivity(intent)
+        }
+    }
+
+    // ── YouTube ─────────────────────────────────────────────────────────
+
+    private fun launchYouTube(query: String): String {
+        return try {
+            if (query.isNotBlank()) {
+                // Search YouTube for the query
+                val intent = Intent(Intent.ACTION_SEARCH).apply {
+                    component = ComponentName("com.google.android.youtube", "com.google.android.youtube.SearchActivity")
+                    putExtra("query", query)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                try {
+                    appContext.startActivity(intent)
+                    "Searching YouTube for $query."
+                } catch (e: ActivityNotFoundException) {
+                    // Fallback: open YouTube via web URL
+                    val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=${Uri.encode(query)}")).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    appContext.startActivity(webIntent)
+                    "Searching YouTube for $query."
+                }
+            } else {
+                // Just open the YouTube app
+                val launchIntent = appContext.packageManager.getLaunchIntentForPackage("com.google.android.youtube")
+                if (launchIntent != null) {
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    appContext.startActivity(launchIntent)
+                    "Opening YouTube."
+                } else {
+                    // YouTube not installed — open web version
+                    val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com")).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    appContext.startActivity(webIntent)
+                    "Opening YouTube in browser."
+                }
+            }
+        } catch (e: Exception) {
+            "I couldn't open YouTube. ${e.message}"
+        }
+    }
+
+    // ── Call ────────────────────────────────────────────────────────────
+
+    private fun launchCall(contactName: String): String {
+        if (contactName.isBlank()) return "Who would you like me to call?"
+
+        return try {
+            // First try to find the contact in the phone's contacts
+            val phoneNumber = lookupContactPhoneNumber(contactName)
+            if (phoneNumber != null) {
+                val callIntent = Intent(Intent.ACTION_CALL).apply {
+                    data = Uri.parse("tel:$phoneNumber")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                appContext.startActivity(callIntent)
+                "Calling $contactName."
+            } else {
+                // Contact not found — open dialer with the name (Android will try to match)
+                val dialIntent = Intent(Intent.ACTION_DIAL).apply {
+                    data = Uri.parse("tel:${Uri.encode(contactName)}")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                appContext.startActivity(dialIntent)
+                "I couldn't find $contactName in your contacts. Opening dialer."
+            }
+        } catch (e: SecurityException) {
+            // No CALL_PHONE permission — fall back to dialer
+            try {
+                val dialIntent = Intent(Intent.ACTION_DIAL).apply {
+                    data = Uri.parse("tel:${Uri.encode(contactName)}")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                appContext.startActivity(dialIntent)
+                "Opening dialer for $contactName. Please grant phone permission to call directly."
+            } catch (e2: Exception) {
+                "I need phone permission to make calls. Please grant the permission in Settings."
+            }
+        } catch (e: Exception) {
+            "I couldn't call $contactName. ${e.message}"
+        }
+    }
+
+    private fun lookupContactPhoneNumber(name: String): String? {
+        return try {
+            var phoneNumber: String? = null
+            val uri = ContactsContract.CommonDataKinds.Phone.CONTENT_URI
+            val projection = arrayOf(
+                ContactsContract.CommonDataKinds.Phone.NUMBER,
+                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME
+            )
+            val selection = "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?"
+            val selectionArgs = arrayOf("%$name%")
+
+            appContext.contentResolver.query(uri, projection, selection, selectionArgs, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    phoneNumber = cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER))
+                }
+            }
+            phoneNumber
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    // ── SMS ──────────────────────────────────────────────────────────────
+
+    private fun launchSms(contactName: String, message: String?): String {
+        if (contactName.isBlank()) return "Who would you like to message?"
+
+        return try {
+            val smsIntent = Intent(Intent.ACTION_SENDTO).apply {
+                data = Uri.parse("smsto:${Uri.encode(contactName)}")
+                if (message != null) {
+                    putExtra("sms_body", message)
+                }
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            appContext.startActivity(smsIntent)
+            "Opening message for $contactName."
+        } catch (e: Exception) {
+            "I couldn't open messages for $contactName. ${e.message}"
+        }
+    }
+
+    // ── Alarm ────────────────────────────────────────────────────────────
+
+    private fun launchAlarm(time: String?): String {
+        return try {
+            if (time != null) {
+                val alarmIntent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
+                    putExtra(AlarmClock.EXTRA_MESSAGE, "MAHI Alarm")
+                    putExtra(AlarmClock.EXTRA_IS_PM, false)
+                    // Try to parse the time
+                    val timeRegex = Regex("(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm)?", RegexOption.IGNORE_CASE)
+                    val match = timeRegex.find(time)
+                    if (match != null) {
+                        var hour = match.groupValues[1].toIntOrNull() ?: 7
+                        val minute = match.groupValues[2].toIntOrNull() ?: 0
+                        val ampm = match.groupValues[3].lowercase()
+                        if (ampm == "pm" && hour < 12) hour += 12
+                        if (ampm == "am" && hour == 12) hour = 0
+                        putExtra(AlarmClock.EXTRA_HOUR, hour)
+                        putExtra(AlarmClock.EXTRA_MINUTES, minute)
+                    }
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                appContext.startActivity(alarmIntent)
+                "Setting alarm for $time."
+            } else {
+                // Just open the alarm app
+                val alarmIntent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                appContext.startActivity(alarmIntent)
+                "Opening alarm settings."
+            }
+        } catch (e: Exception) {
+            "I couldn't set an alarm. ${e.message}"
+        }
+    }
+
+    // ── Calendar ─────────────────────────────────────────────────────────
+
+    private fun launchCalendar(): String {
+        return try {
+            val calendarIntent = Intent(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_APP_CALENDAR)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            appContext.startActivity(calendarIntent)
+            "Opening calendar."
+        } catch (e: Exception) {
+            "I couldn't open the calendar. ${e.message}"
+        }
+    }
+
+    // ── Web Search ───────────────────────────────────────────────────────
+
+    private fun launchWebSearch(query: String): String {
+        if (query.isBlank()) return "What would you like me to search for?"
+
+        return try {
+            val searchIntent = Intent(Intent.ACTION_WEB_SEARCH).apply {
+                putExtra("query", query)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            appContext.startActivity(searchIntent)
+            "Searching for $query."
+        } catch (e: Exception) {
+            // Fallback to opening in browser
+            try {
+                val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=${Uri.encode(query)}")).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                appContext.startActivity(webIntent)
+                "Searching Google for $query."
+            } catch (e2: Exception) {
+                "I couldn't search for that. ${e2.message}"
+            }
+        }
+    }
+
+    // ── Device Control ──────────────────────────────────────────────────
 
     private suspend fun handleDeviceControl(intent: IntentClassifier.IntentResult): String {
         val action = intent.action ?: return "I couldn't understand which device to control."
@@ -354,6 +711,8 @@ class MahiViewModel @Inject constructor(
             "Couldn't ${if (turnOn) "enable" else "disable"} ${device.replace("_", " ")}. Check permissions."
         }
     }
+
+    // ── Weather ──────────────────────────────────────────────────────────
 
     private suspend fun fetchWeather(city: String): String {
         _weatherState.value = _weatherState.value.copy(isLoading = true)
@@ -377,11 +736,20 @@ class MahiViewModel @Inject constructor(
             )
             navigateTo("weather")
             "Weather in ${weather.name ?: city}: ${(weather.main?.temp ?: 0.0).toInt()} degrees, ${weather.weather?.firstOrNull()?.description ?: "clear"}. Humidity ${weather.main?.humidity ?: 0}%. Feels like ${(weather.main?.feelsLike ?: 0.0).toInt()} degrees."
+        } catch (e: retrofit2.HttpException) {
+            _weatherState.value = _weatherState.value.copy(isLoading = false, error = e.message)
+            when (e.code()) {
+                401 -> "Weather API key seems invalid. Please check your OpenWeatherMap API key in Settings."
+                404 -> "City not found. Try specifying a different city name."
+                else -> "Couldn't fetch weather for $city. Error: ${e.code()}"
+            }
         } catch (e: Exception) {
             _weatherState.value = _weatherState.value.copy(isLoading = false, error = e.message)
-            "Couldn't fetch weather for $city. ${e.message}"
+            "Couldn't fetch weather for $city. Please check your internet connection."
         }
     }
+
+    // ── News ──────────────────────────────────────────────────────────────
 
     private suspend fun fetchNews(category: String): String {
         _newsState.value = _newsState.value.copy(isLoading = true, selectedCategory = category)
@@ -394,13 +762,22 @@ class MahiViewModel @Inject constructor(
             val news = NewsClient.instance.getTopHeadlines(category = category, lang = "en", token = newsApiKey)
             _newsState.value = NewsUiState(articles = news.articles ?: emptyList(), isLoading = false, selectedCategory = category)
             navigateTo("news")
-            if (news.articles.isNullOrEmpty()) "No news articles found."
+            if (news.articles.isNullOrEmpty()) "No news articles found at the moment."
             else "Top headlines: ${news.articles.take(3).mapIndexed { i, a -> "${i + 1}. ${a.title ?: "Untitled"}" }.joinToString(". ")}"
+        } catch (e: retrofit2.HttpException) {
+            _newsState.value = _newsState.value.copy(isLoading = false, error = e.message)
+            when (e.code()) {
+                401 -> "News API key seems invalid. Please check your GNews API key in Settings."
+                403 -> "News API access denied. Your API key may have expired."
+                else -> "Couldn't fetch news. Error: ${e.code()}"
+            }
         } catch (e: Exception) {
             _newsState.value = _newsState.value.copy(isLoading = false, error = e.message)
-            "Couldn't fetch news. ${e.message}"
+            "Couldn't fetch news. Please check your internet connection."
         }
     }
+
+    // ── Routine ──────────────────────────────────────────────────────────
 
     private suspend fun executeRoutine(name: String?): String {
         if (name == null) return "No routine specified."
@@ -411,11 +788,15 @@ class MahiViewModel @Inject constructor(
         } catch (e: Exception) { "Couldn't execute $name routine. ${e.message}" }
     }
 
+    // ── Notifications ────────────────────────────────────────────────────
+
     private fun readNotifications(): String {
         val notifs = _notifications.value.take(5)
         return if (notifs.isEmpty()) "No recent notifications."
         else "Recent notifications: ${notifs.mapIndexed { i, n -> "${i + 1}. ${n.appName}: ${n.title}" }.joinToString(". ")}"
     }
+
+    // ── AI Response (fallback for general chat) ──────────────────────────
 
     private suspend fun fetchAiResponse(input: String): String {
         navigateTo("chat")
@@ -424,10 +805,12 @@ class MahiViewModel @Inject constructor(
                 com.mahi.assistant.ai.ChatMessage(role = it.role.name.lowercase(), content = it.content)
             }
             aiEngine.sendMessage(input, history)
-        } catch (e: Exception) { "Technical difficulty. Please try again. Error: ${e.message}" }
+        } catch (e: Exception) {
+            "I'm having trouble connecting right now. Please check your internet connection and try again."
+        }
     }
 
-    // ── Device Control ──────────────────────────────────────────────
+    // ── Device Control UI ────────────────────────────────────────────────
 
     fun toggleDevice(deviceName: String) {
         viewModelScope.launch {
