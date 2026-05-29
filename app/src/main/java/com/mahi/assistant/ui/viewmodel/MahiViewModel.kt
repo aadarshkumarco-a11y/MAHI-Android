@@ -984,12 +984,10 @@ class MahiViewModel @Inject constructor(
      */
     private fun resolveContactName(phoneNumber: String): String? {
         return try {
-            val uri = ContactsContract.PhoneLookup.CONTENT_URI
+            val uri = Uri.withAppendedPath(ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode(phoneNumber))
             val projection = arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME)
-            val selection = "${ContactsContract.PhoneLookup.NUMBER} = ?"
-            val selectionArgs = arrayOf(phoneNumber)
 
-            appContext.contentResolver.query(uri, projection, selection, selectionArgs, null)?.use { cursor ->
+            appContext.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
                 if (cursor.moveToFirst()) {
                     cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.PhoneLookup.DISPLAY_NAME))
                 } else null
