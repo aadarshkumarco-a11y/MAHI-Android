@@ -27,6 +27,7 @@ import com.mahi.assistant.api.NewsClient
 import com.mahi.assistant.api.NewsService
 import com.mahi.assistant.automation.RoutineEngine
 import com.mahi.assistant.control.DeviceControlManager
+import com.mahi.assistant.receiver.ReminderReceiver
 import com.mahi.assistant.data.local.MessageDao
 import com.mahi.assistant.data.local.MessageEntity
 import com.mahi.assistant.data.local.SettingsManager

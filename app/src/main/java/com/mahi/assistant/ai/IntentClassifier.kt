@@ -279,7 +279,7 @@ User input: $input
         """.trimIndent()
 
         return try {
-            val aiResponse = aiEngine.queryOnce(prompt)
+            val aiResponse = aiEngine!!.queryOnce(prompt)
             parseAiClassification(aiResponse, input)
         } catch (_: Exception) {
             // AI failed — try basic keyword matching as last resort
