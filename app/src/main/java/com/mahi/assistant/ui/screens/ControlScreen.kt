@@ -36,6 +36,7 @@ enum class DeviceSection(val label: String) {
  * Device control panel — JARVIS-style device management.
  * Now scrollable and connected to ViewModel for real device state.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ControlScreen(
     viewModel: MahiViewModel,
