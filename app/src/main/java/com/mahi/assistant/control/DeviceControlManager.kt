@@ -90,8 +90,12 @@ class DeviceControlManager @Inject constructor(
     private var flashCameraId: String? = null
 
     init {
-        refreshAllStates()
-        discoverFlashCamera()
+        // Defer initialization — permissions are NOT granted at Hilt-create time.
+        // Accessing Bluetooth/Camera here would throw SecurityException on Android 12+.
+        scope.launch {
+            try { refreshAllStates() } catch (_: Exception) { /* permissions not granted yet */ }
+            try { discoverFlashCamera() } catch (_: Exception) { /* camera not accessible yet */ }
+        }
     }
 
     // ──────────────────────────────────────────────
@@ -654,11 +658,19 @@ class DeviceControlManager @Inject constructor(
             // Flashlight — Android has no public API to query; track from our own state
             states["flashlight"] = _deviceStates.value["flashlight"] ?: DeviceFeatureState(isOn = false)
 
-            // WiFi
-            states["wifi"] = DeviceFeatureState(isOn = wifiManager.isWifiEnabled)
+            // WiFi — wrapped in try-catch for SecurityException on Android 13+
+            states["wifi"] = try {
+                DeviceFeatureState(isOn = wifiManager.isWifiEnabled)
+            } catch (_: Exception) {
+                DeviceFeatureState(isOn = false)
+            }
 
-            // Bluetooth
-            states["bluetooth"] = DeviceFeatureState(isOn = bluetoothAdapter?.isEnabled == true)
+            // Bluetooth — requires BLUETOOTH_CONNECT runtime permission on Android 12+
+            states["bluetooth"] = try {
+                DeviceFeatureState(isOn = bluetoothAdapter?.isEnabled == true)
+            } catch (_: SecurityException) {
+                DeviceFeatureState(isOn = false)
+            }
 
             // Brightness
             states["brightness"] = DeviceFeatureState(
@@ -667,16 +679,24 @@ class DeviceControlManager @Inject constructor(
             )
 
             // Ringer
-            states["ringer"] = DeviceFeatureState(
-                isOn = audioManager.ringerMode != AudioManager.RINGER_MODE_SILENT,
-                value = audioManager.ringerMode
-            )
+            states["ringer"] = try {
+                DeviceFeatureState(
+                    isOn = audioManager.ringerMode != AudioManager.RINGER_MODE_SILENT,
+                    value = audioManager.ringerMode
+                )
+            } catch (_: Exception) {
+                DeviceFeatureState(isOn = true, value = AudioManager.RINGER_MODE_NORMAL)
+            }
 
             // Volume
-            states["volume"] = DeviceFeatureState(
-                isOn = getVolume() > 0,
-                value = getVolume()
-            )
+            states["volume"] = try {
+                DeviceFeatureState(
+                    isOn = getVolume() > 0,
+                    value = getVolume()
+                )
+            } catch (_: Exception) {
+                DeviceFeatureState(isOn = true, value = 7)
+            }
 
             // Mobile data
             states["mobile_data"] = DeviceFeatureState(isOn = isMobileDataEnabled())
@@ -696,12 +716,18 @@ class DeviceControlManager @Inject constructor(
             states["screen_timeout"] = DeviceFeatureState(isOn = true, value = getScreenTimeout())
 
             // Battery saver
-            states["battery_saver"] = DeviceFeatureState(isOn = powerManager.isPowerSaveMode)
+            states["battery_saver"] = try {
+                DeviceFeatureState(isOn = powerManager.isPowerSaveMode)
+            } catch (_: Exception) {
+                DeviceFeatureState(isOn = false)
+            }
 
-            // DND
-            val dndOn = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                notificationManager.currentInterruptionFilter != android.app.NotificationManager.INTERRUPTION_FILTER_ALL
-            } else false
+            // DND — requires notification policy access
+            val dndOn = try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    notificationManager.currentInterruptionFilter != android.app.NotificationManager.INTERRUPTION_FILTER_ALL
+                } else false
+            } catch (_: Exception) { false }
             states["dnd"] = DeviceFeatureState(isOn = dndOn)
 
             _deviceStates.value = states

@@ -29,8 +29,9 @@ class VoiceRecognitionEngine(
         fun onEnd() {}
     }
 
-    private val speechRecognizer: SpeechRecognizer =
-        SpeechRecognizer.createSpeechRecognizer(context)
+    // SpeechRecognizer must be created on the main thread with an Activity context.
+    // Since Hilt provides Application context, we lazily create it and handle errors gracefully.
+    private var speechRecognizer: SpeechRecognizer? = null
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
@@ -109,7 +110,15 @@ class VoiceRecognitionEngine(
     }
 
     init {
-        speechRecognizer.setRecognitionListener(recognitionListener)
+        // SpeechRecognizer is created lazily in startListening() because:
+        // 1. It requires the main thread looper which may not be ready during Hilt init
+        // 2. Application context may not work on all devices - we handle the error
+        try {
+            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context)
+            speechRecognizer?.setRecognitionListener(recognitionListener)
+        } catch (e: Exception) {
+            // Will be retried in startListening()
+        }
     }
 
     /**
@@ -120,9 +129,19 @@ class VoiceRecognitionEngine(
             callback?.onError(SpeechRecognizer.ERROR_CLIENT)
             return
         }
+        // Recreate recognizer if it was destroyed or failed to init
+        if (speechRecognizer == null) {
+            try {
+                speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context)
+                speechRecognizer?.setRecognitionListener(recognitionListener)
+            } catch (e: Exception) {
+                callback?.onError(SpeechRecognizer.ERROR_CLIENT)
+                return
+            }
+        }
         _partialResult.value = null
         _finalResult.value = null
-        speechRecognizer.startListening(recognizerIntent)
+        speechRecognizer?.startListening(recognizerIntent)
     }
 
     /**
@@ -130,7 +149,7 @@ class VoiceRecognitionEngine(
      */
     fun stopListening() {
         if (_isListening.value) {
-            speechRecognizer.stopListening()
+            speechRecognizer?.stopListening()
         }
     }
 
@@ -138,7 +157,7 @@ class VoiceRecognitionEngine(
      * Cancel the current recognition without producing a result.
      */
     fun cancel() {
-        speechRecognizer.cancel()
+        speechRecognizer?.cancel()
         _isListening.value = false
         _partialResult.value = null
     }
@@ -148,7 +167,8 @@ class VoiceRecognitionEngine(
      * Must be called when this engine is no longer needed.
      */
     fun destroy() {
-        speechRecognizer.destroy()
+        speechRecognizer?.destroy()
+        speechRecognizer = null
         _isListening.value = false
         _partialResult.value = null
         _finalResult.value = null

@@ -78,8 +78,12 @@ class RoutineEngine @Inject constructor(
 
     init {
         scope.launch {
-            seedPredefinedRoutinesIfNeeded()
-            refreshRoutines()
+            try {
+                seedPredefinedRoutinesIfNeeded()
+                refreshRoutines()
+            } catch (e: Exception) {
+                android.util.Log.e("RoutineEngine", "Failed to seed routines on init", e)
+            }
         }
     }
 

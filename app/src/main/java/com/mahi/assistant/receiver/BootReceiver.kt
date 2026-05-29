@@ -27,7 +27,7 @@ class BootReceiver : BroadcastReceiver() {
 
     companion object {
         private const val TAG = "BootReceiver"
-        private const val PREFS_NAME = "mahi_prefs"
+        private const val PREFS_NAME = "mahi_settings"
         private const val KEY_AUTOSTART_WAKEWORD = "autostart_wakeword"
         private const val KEY_AUTOSTART_FLOATING = "autostart_floating"
     }
