@@ -1,146 +1,56 @@
 package com.mahi.assistant
 
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
-import android.net.Uri
+import android.content.IntentFilter
 import android.os.Bundle
-import android.provider.Settings
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.Surface
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.core.app.ActivityCompat
-import com.mahi.assistant.ui.theme.MAHITheme
-import com.mahi.assistant.ui.theme.DeepSpaceBlack
+import androidx.activity.viewModels
+import com.mahi.assistant.ui.viewmodel.MahiViewModel
 import com.mahi.assistant.ui.MahiApp
 import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
-    var hasAllPermissions by mutableStateOf(false)
-        private set
+    private val viewModel: MahiViewModel by viewModels()
 
-    private val requiredPermissions = arrayOf(
-        android.Manifest.permission.RECORD_AUDIO,
-        android.Manifest.permission.CAMERA,
-        android.Manifest.permission.READ_CONTACTS,
-        android.Manifest.permission.CALL_PHONE,
-        android.Manifest.permission.READ_CALL_LOG,
-        android.Manifest.permission.SEND_SMS,
-        android.Manifest.permission.READ_SMS,
-        android.Manifest.permission.READ_CALENDAR,
-        android.Manifest.permission.WRITE_CALENDAR,
-        android.Manifest.permission.POST_NOTIFICATIONS,
-        android.Manifest.permission.READ_PHONE_STATE,
-        android.Manifest.permission.BLUETOOTH_CONNECT,
-        android.Manifest.permission.ACCESS_FINE_LOCATION,
-        android.Manifest.permission.ACCESS_COARSE_LOCATION,
-    )
-
-    private val permissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        val allGranted = permissions.all { it.value }
-        hasAllPermissions = allGranted
-        if (!allGranted) {
-            val denied = permissions.filter { !it.value }.keys
-            val shouldShowRationale = denied.any { perm ->
-                ActivityCompat.shouldShowRequestPermissionRationale(this, perm)
-            }
-            if (!shouldShowRationale) {
-                Toast.makeText(
-                    this,
-                    "Please grant permissions in Settings for full functionality",
-                    Toast.LENGTH_LONG
-                ).show()
-                openAppSettings()
+    private val commandReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                "com.mahi.assistant.VOICE_COMMAND" -> {
+                    viewModel.startListening()
+                }
+                "com.mahi.assistant.TEXT_COMMAND" -> {
+                    val text = intent.getStringExtra("text") ?: ""
+                    if (text.isNotBlank()) {
+                        viewModel.updateInput(text)
+                        viewModel.submitInput()
+                    }
+                }
             }
         }
-    }
-
-    private val overlayPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) {
-        checkOverlayPermission()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Make status bar and nav bar transparent
-        window.statusBarColor = android.graphics.Color.TRANSPARENT
-        window.navigationBarColor = android.graphics.Color.TRANSPARENT
-
-        requestRequiredPermissions()
-        checkOverlayPermission()
+        // Register broadcast receiver for floating assistant commands
+        val filter = IntentFilter().apply {
+            addAction("com.mahi.assistant.VOICE_COMMAND")
+            addAction("com.mahi.assistant.TEXT_COMMAND")
+        }
+        registerReceiver(commandReceiver, filter)
 
         setContent {
-            MAHITheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = DeepSpaceBlack  // FORCE dark background, not dynamic color
-                ) {
-                    MahiApp(
-                        hasAllPermissions = hasAllPermissions,
-                        onRequestPermissions = { requestRequiredPermissions() }
-                    )
-                }
-            }
-        }
-
-        handleIntent(intent)
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        handleIntent(intent)
-    }
-
-    private fun handleIntent(intent: Intent?) {
-        when (intent?.action) {
-            Intent.ACTION_VOICE_COMMAND -> {
-                // Triggered from voice command shortcut
-            }
-            Intent.ACTION_MAIN -> {
-                // Standard launch
-            }
+            MahiApp()
         }
     }
 
-    private fun requestRequiredPermissions() {
-        val ungranted = requiredPermissions.filter { perm ->
-            ActivityCompat.checkSelfPermission(this, perm) !=
-                    android.content.pm.PackageManager.PERMISSION_GRANTED
-        }
-        if (ungranted.isEmpty()) {
-            hasAllPermissions = true
-        } else {
-            permissionLauncher.launch(ungranted.toTypedArray())
-        }
-    }
-
-    private fun checkOverlayPermission() {
-        if (!Settings.canDrawOverlays(this)) {
-            val intent = Intent(
-                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.parse("package:$packageName")
-            )
-            overlayPermissionLauncher.launch(intent)
-        }
-    }
-
-    private fun openAppSettings() {
-        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-            data = Uri.parse("package:$packageName")
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        startActivity(intent)
+    override fun onDestroy() {
+        super.onDestroy()
+        try { unregisterReceiver(commandReceiver) } catch (_: Exception) {}
     }
 }

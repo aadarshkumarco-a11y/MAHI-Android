@@ -28,8 +28,8 @@ class BootReceiver : BroadcastReceiver() {
     companion object {
         private const val TAG = "BootReceiver"
         private const val PREFS_NAME = "mahi_settings"
-        private const val KEY_AUTOSTART_WAKEWORD = "autostart_wakeword"
-        private const val KEY_AUTOSTART_FLOATING = "autostart_floating"
+        private const val KEY_AUTOSTART_WAKEWORD = "auto_start_boot"
+        private const val KEY_AUTOSTART_FLOATING = "floating_assistant"
     }
 
     override fun onReceive(context: Context, intent: Intent) {

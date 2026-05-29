@@ -600,7 +600,7 @@ class MahiViewModel @Inject constructor(
     // WEATHER — Open-Meteo (FREE, No API key!) + OWM fallback
     // ══════════════════════════════════════════════════════════════════════
 
-    private suspend fun fetchWeather(city: String): String {
+    private suspend fun fetchWeather(city: String): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         _weatherState.value = _weatherState.value.copy(isLoading = true)
         // Use settings default city if none provided
         val cityName = city.ifBlank { settingsManager.getDefaultCity() }
@@ -721,12 +721,18 @@ class MahiViewModel @Inject constructor(
         _newsState.value = _newsState.value.copy(isLoading = true)
         val maxArticles = count.toIntOrNull()?.coerceIn(1, 10) ?: 5
 
-        // Strategy: Try GNews API first, fallback to RSS (FREE, no key needed)
+        // Strategy: RSS first (FREE, no API key, reliable), then GNews API as fallback
+        val rssResult = fetchNewsRss(topic, maxArticles)
+        if (rssResult != "No news found for ${topic.ifBlank { "top headlines" }}." &&
+            rssResult != "Couldn't fetch news. Please check your internet connection.") {
+            return rssResult
+        }
+
+        // RSS failed — try GNews API as fallback
         val apiResult = fetchNewsFromApi(topic, maxArticles)
         if (apiResult != null) return apiResult
 
-        // API failed — use RSS fallback
-        return fetchNewsRss(topic, maxArticles)
+        return rssResult  // Return RSS error message
     }
 
     /**
@@ -1200,7 +1206,13 @@ class MahiViewModel @Inject constructor(
     // ══════════════════════════════════════════════════════════════════════
 
     private fun toggleContinuousMode(action: String): String {
-        val enable = action.contains("enable") || action == "toggle_continuous" && !_continuousMode.value
+        val lowerAction = action.lowercase()
+        val enable = when {
+            lowerAction.contains("enable") || lowerAction.contains("on") || lowerAction.contains("start") -> true
+            lowerAction.contains("disable") || lowerAction.contains("off") || lowerAction.contains("stop") -> false
+            lowerAction == "toggle_continuous" -> !_continuousMode.value  // toggle
+            else -> !_continuousMode.value  // default: toggle
+        }
         _continuousMode.value = enable
         settingsManager.setContinuousMode(enable)
         _settingsState.value = _settingsState.value.copy(continuousMode = enable)
@@ -1568,17 +1580,104 @@ class MahiViewModel @Inject constructor(
 
     private suspend fun handleDeviceControl(intent: IntentClassifier.IntentResult): String {
         val action = intent.action ?: return "I couldn't understand which device to control."
-        val parts = action.split("_")
-        if (parts.size < 2) return "Invalid device command."
-        val command = parts[0]
-        val device = parts.drop(1).joinToString("_")
-        val turnOn = command == "turn" && parts.getOrNull(1) == "on"
-        val result = deviceControlManager.toggle(device, if (turnOn) 1 else 0)
-        refreshDeviceState()
-        return if (result.isSuccess) {
-            "${device.replace("_", " ").replaceFirstChar { it.uppercase() }} ${if (turnOn) "enabled" else "disabled"}."
+        val lowerAction = action.lowercase()
+
+        // Parse device and state from action string
+        // Formats: "flashlight_on", "wifi_off", "brightness_70", "volume_50", "toggle_flashlight", etc.
+        val device: String
+        val stateValue: Int  // 1 = on, 0 = off, -1 = toggle
+
+        when {
+            // Explicit on/off patterns: "flashlight_on", "wifi_off", "bluetooth_on", etc.
+            lowerAction.matches(".*(flashlight|torch)_?(on|off|jala|bujha).*") -> {
+                device = "flashlight"
+                stateValue = if (lowerAction.contains("on") || lowerAction.contains("jala")) 1 else 0
+            }
+            lowerAction.matches(".*wifi_?(on|off).*") -> {
+                device = "wifi"
+                stateValue = if (lowerAction.contains("on")) 1 else 0
+            }
+            lowerAction.matches(".*bluetooth_?(on|off).*") -> {
+                device = "bluetooth"
+                stateValue = if (lowerAction.contains("on")) 1 else 0
+            }
+            lowerAction.matches(".*(brightness|screen_brightness)_?\\d+.*") -> {
+                device = "brightness"
+                val level = lowerAction.filter { it.isDigit() }.toIntOrNull()?.coerceIn(0, 255) ?: 128
+                val result = deviceControlManager.setBrightness(level)
+                refreshDeviceState()
+                return if (result.isSuccess) "Brightness set to $level." else "Couldn't set brightness. Check permissions."
+            }
+            lowerAction.matches(".*volume_?\\d+.*") -> {
+                device = "volume"
+                val level = lowerAction.filter { it.isDigit() }.toIntOrNull()?.coerceIn(0, 15) ?: 7
+                val result = deviceControlManager.setVolume(level)
+                refreshDeviceState()
+                return if (result.isSuccess) "Volume set to $level." else "Couldn't set volume. Check permissions."
+            }
+            lowerAction.matches(".*(silent|vibrate|normal)_?mode?.*") -> {
+                device = "ringer_mode"
+                val mode = when {
+                    lowerAction.contains("silent") -> 0
+                    lowerAction.contains("vibrate") -> 1
+                    else -> 2
+                }
+                val result = deviceControlManager.setRingerMode(mode)
+                refreshDeviceState()
+                return if (result.isSuccess) "Ringer mode set to ${if (mode == 0) "silent" else if (mode == 1) "vibrate" else "normal"}." else "Couldn't change ringer mode."
+            }
+            lowerAction.matches(".*dnd_?(on|off).*") || lowerAction.contains("do_not_disturb") -> {
+                device = "dnd"
+                stateValue = if (lowerAction.contains("on")) 1 else 0
+            }
+            lowerAction.matches(".*hotspot_?(on|off).*") -> {
+                device = "hotspot"
+                stateValue = if (lowerAction.contains("on")) 1 else 0
+            }
+            lowerAction.matches(".*rotate_?(on|off).*") || lowerAction.contains("auto_rotate") -> {
+                device = "auto_rotate"
+                stateValue = if (lowerAction.contains("on")) 1 else 0
+            }
+            lowerAction.matches(".*mobile_?data_?(on|off).*") -> {
+                device = "mobile_data"
+                stateValue = if (lowerAction.contains("on")) 1 else 0
+            }
+            // Generic toggle patterns
+            lowerAction.startsWith("toggle_") -> {
+                device = lowerAction.removePrefix("toggle_")
+                stateValue = -1  // toggle
+            }
+            // Generic on/off patterns
+            lowerAction.endsWith("_on") -> {
+                device = lowerAction.removeSuffix("_on")
+                stateValue = 1
+            }
+            lowerAction.endsWith("_off") -> {
+                device = lowerAction.removeSuffix("_off")
+                stateValue = 0
+            }
+            else -> {
+                device = lowerAction
+                stateValue = -1  // default to toggle
+            }
+        }
+
+        val result = if (stateValue == -1) {
+            deviceControlManager.toggle(device, 1)  // toggle
         } else {
-            "Couldn't ${if (turnOn) "enable" else "disable"} ${device.replace("_", " ")}. Check permissions."
+            deviceControlManager.toggle(device, stateValue)
+        }
+        refreshDeviceState()
+
+        return if (result.isSuccess) {
+            val deviceDisplay = device.replace("_", " ").replaceFirstChar { it.uppercase() }
+            when (stateValue) {
+                1 -> "$deviceDisplay enabled."
+                0 -> "$deviceDisplay disabled."
+                else -> "$deviceDisplay toggled."
+            }
+        } else {
+            "Couldn't control ${device.replace("_", " ")}. Check permissions."
         }
     }
 

@@ -99,9 +99,8 @@ class RoutineEngine @Inject constructor(
                 triggerValue = "good morning",
                 actions = listOf(
                     RoutineAction(ActionType.TOGGLE_WIFI, mapOf("state" to "on")),
-                    RoutineAction(ActionType.TOGGLE_WIFI, mapOf("state" to "on")),
-                    RoutineAction(ActionType.SET_VOLUME, mapOf("stream" to "brightness", "level" to "178")),
-                    RoutineAction(ActionType.SPEAK_TEXT, mapOf("text" to "Reading weather forecast")),
+                    RoutineAction(ActionType.SET_VOLUME, mapOf("level" to "10")),
+                    RoutineAction(ActionType.SPEAK_TEXT, mapOf("text" to "Good morning! Reading weather forecast")),
                     RoutineAction(ActionType.SPEAK_TEXT, mapOf("text" to "Reading today's news"))
                 )
             ),
@@ -111,7 +110,7 @@ class RoutineEngine @Inject constructor(
                 triggerValue = "good night",
                 actions = listOf(
                     RoutineAction(ActionType.TOGGLE_WIFI, mapOf("state" to "off")),
-                    RoutineAction(ActionType.SET_VOLUME, mapOf("stream" to "brightness", "level" to "51")),
+                    RoutineAction(ActionType.SET_VOLUME, mapOf("level" to "2")),
                     RoutineAction(ActionType.SPEAK_TEXT, mapOf("text" to "Setting silent mode")),
                     RoutineAction(ActionType.SPEAK_TEXT, mapOf("text" to "Enabling do not disturb"))
                 )
@@ -121,9 +120,9 @@ class RoutineEngine @Inject constructor(
                 triggerType = TriggerType.VOICE_COMMAND,
                 triggerValue = "meeting mode",
                 actions = listOf(
-                    RoutineAction(ActionType.SPEAK_TEXT, mapOf("text" to "Setting silent mode")),
+                    RoutineAction(ActionType.SET_VOLUME, mapOf("level" to "0")),
                     RoutineAction(ActionType.TOGGLE_WIFI, mapOf("state" to "off")),
-                    RoutineAction(ActionType.SPEAK_TEXT, mapOf("text" to "Enabling do not disturb"))
+                    RoutineAction(ActionType.SPEAK_TEXT, mapOf("text" to "Meeting mode activated. Silent and disconnected."))
                 )
             ),
             Routine(
@@ -131,9 +130,9 @@ class RoutineEngine @Inject constructor(
                 triggerType = TriggerType.VOICE_COMMAND,
                 triggerValue = "focus mode",
                 actions = listOf(
-                    RoutineAction(ActionType.SPEAK_TEXT, mapOf("text" to "Enabling do not disturb")),
+                    RoutineAction(ActionType.SET_VOLUME, mapOf("level" to "1")),
                     RoutineAction(ActionType.TOGGLE_WIFI, mapOf("state" to "off")),
-                    RoutineAction(ActionType.SET_VOLUME, mapOf("stream" to "brightness", "level" to "102"))
+                    RoutineAction(ActionType.SPEAK_TEXT, mapOf("text" to "Focus mode activated. Minimal distractions."))
                 )
             ),
             Routine(
