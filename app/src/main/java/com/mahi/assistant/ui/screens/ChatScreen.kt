@@ -24,7 +24,7 @@ import com.mahi.assistant.ui.viewmodel.MahiViewModel
 
 /**
  * Chat conversation screen — full conversation with the AI assistant.
- * Now properly connected to ViewModel for real AI responses.
+ * Properly connected to shared ViewModel for real AI responses.
  */
 @Composable
 fun ChatScreen(
@@ -84,6 +84,16 @@ fun ChatScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = TextSecondary,
                     )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    // Show API key warning if not configured
+                    val settingsState by viewModel.settingsState.collectAsState()
+                    if (settingsState.geminiKey.isBlank()) {
+                        Text(
+                            text = "Set your Gemini API key in Settings first!",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Amber,
+                        )
+                    }
                 }
             }
         } else {

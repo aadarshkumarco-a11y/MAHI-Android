@@ -1,6 +1,5 @@
 package com.mahi.assistant.di
 
-import com.mahi.assistant.data.remote.GeminiApiService
 import com.mahi.assistant.data.remote.NewsApiService
 import com.mahi.assistant.data.remote.WeatherApiService
 import com.google.gson.Gson
@@ -21,7 +20,6 @@ import javax.inject.Singleton
 @InstallIn(SingletonComponent::class)
 object NetworkModule {
 
-    private const val GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/"
     private const val WEATHER_BASE_URL = "https://api.openweathermap.org/"
     private const val NEWS_BASE_URL = "https://gnews.io/"
 
@@ -66,17 +64,6 @@ object NetworkModule {
 
     @Provides
     @Singleton
-    @Named("gemini")
-    fun provideGeminiRetrofit(okHttpClient: OkHttpClient, gson: Gson): Retrofit {
-        return Retrofit.Builder()
-            .baseUrl(GEMINI_BASE_URL)
-            .client(okHttpClient)
-            .addConverterFactory(GsonConverterFactory.create(gson))
-            .build()
-    }
-
-    @Provides
-    @Singleton
     @Named("weather")
     fun provideWeatherRetrofit(okHttpClient: OkHttpClient, gson: Gson): Retrofit {
         return Retrofit.Builder()
@@ -95,12 +82,6 @@ object NetworkModule {
             .client(okHttpClient)
             .addConverterFactory(GsonConverterFactory.create(gson))
             .build()
-    }
-
-    @Provides
-    @Singleton
-    fun provideGeminiApiService(@Named("gemini") retrofit: Retrofit): GeminiApiService {
-        return retrofit.create(GeminiApiService::class.java)
     }
 
     @Provides

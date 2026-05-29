@@ -1,6 +1,5 @@
 package com.mahi.assistant.ui
 
-import androidx.compose.animation.core.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -95,7 +94,7 @@ private fun MahiBottomBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(64.dp),
-            containerColor = Color.Transparent,
+            containerColor = androidx.compose.ui.graphics.Color.Transparent,
             contentColor = TextPrimary,
         ) {
             bottomNavItems.forEach { item ->
@@ -139,14 +138,10 @@ private fun MahiBottomBar(
                     selected = isSelected,
                     onClick = {
                         navController.navigate(item.route) {
-                            // Pop up to the start destination of the graph to
-                            // avoid building up a large stack of destinations
                             popUpTo(navController.graph.findStartDestination().id) {
                                 saveState = true
                             }
-                            // Avoid multiple copies of the same destination
                             launchSingleTop = true
-                            // Restore state when reselecting a previously selected item
                             restoreState = true
                         }
                     },
@@ -162,6 +157,3 @@ private fun MahiBottomBar(
         }
     }
 }
-
-// Local Color import for Surface containerColor
-private val Color = androidx.compose.ui.graphics.Color

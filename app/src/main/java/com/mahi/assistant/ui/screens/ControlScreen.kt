@@ -1,9 +1,8 @@
 package com.mahi.assistant.ui.screens
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -35,7 +34,7 @@ enum class DeviceSection(val label: String) {
 
 /**
  * Device control panel — JARVIS-style device management.
- * Now connected to ViewModel for real device state.
+ * Now scrollable and connected to ViewModel for real device state.
  */
 @Composable
 fun ControlScreen(
@@ -66,7 +65,8 @@ fun ControlScreen(
             .fillMaxSize()
             .statusBarsPadding()
             .navigationBarsPadding()
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 16.dp)
+            .verticalScroll(rememberScrollState()),  // NOW SCROLLABLE!
     ) {
         // ── Header ──────────────────────────────────────────────
         Spacer(modifier = Modifier.height(12.dp))
@@ -88,8 +88,8 @@ fun ControlScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // ── Sections with Grid ──────────────────────────────────
-        DeviceSection.values().forEach { section ->
+        // ── Sections with FlowRow for proper layout ─────────
+        DeviceSection.entries.forEach { section ->
             val sectionToggles = toggles.filter { it.section == section }
 
             if (sectionToggles.isNotEmpty()) {
@@ -101,28 +101,35 @@ fun ControlScreen(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // 2-column grid
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
-                    modifier = Modifier.height(((sectionToggles.size / 2 + sectionToggles.size % 2) * 130).dp),
+                // 2-column grid using FlowRow
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
-                    userScrollEnabled = false,
                 ) {
-                    items(sectionToggles, key = { it.id }) { toggle ->
-                        DeviceToggleCard(
-                            name = toggle.name,
-                            icon = toggle.icon,
-                            isOn = toggle.isOn,
-                            onToggle = {
-                                viewModel.toggleDevice(toggle.id)
-                            },
-                        )
+                    sectionToggles.forEach { toggle ->
+                        Box(modifier = Modifier.weight(1f, fill = true)) {
+                            DeviceToggleCard(
+                                name = toggle.name,
+                                icon = toggle.icon,
+                                isOn = toggle.isOn,
+                                onToggle = {
+                                    viewModel.toggleDevice(toggle.id)
+                                },
+                            )
+                        }
+                    }
+                    // Fill remaining space for odd items
+                    if (sectionToggles.size % 2 != 0) {
+                        Spacer(modifier = Modifier.weight(1f))
                     }
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
             }
         }
+
+        // Bottom spacing
+        Spacer(modifier = Modifier.height(24.dp))
     }
 }

@@ -9,7 +9,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -17,6 +16,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.app.ActivityCompat
 import com.mahi.assistant.ui.theme.MAHITheme
+import com.mahi.assistant.ui.theme.DeepSpaceBlack
 import com.mahi.assistant.ui.MahiApp
 import dagger.hilt.android.AndroidEntryPoint
 
@@ -71,7 +71,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Make status bar and nav bar transparent (manual edge-to-edge for older activity)
+        // Make status bar and nav bar transparent
         window.statusBarColor = android.graphics.Color.TRANSPARENT
         window.navigationBarColor = android.graphics.Color.TRANSPARENT
 
@@ -82,7 +82,7 @@ class MainActivity : ComponentActivity() {
             MAHITheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
+                    color = DeepSpaceBlack  // FORCE dark background, not dynamic color
                 ) {
                     MahiApp(
                         hasAllPermissions = hasAllPermissions,

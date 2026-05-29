@@ -1,6 +1,5 @@
 package com.mahi.assistant.ui.screens
 
-import androidx.compose.animation.core.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -16,6 +15,7 @@ import androidx.compose.ui.unit.dp
 import com.mahi.assistant.ui.components.GlowCard
 import com.mahi.assistant.ui.components.NeonButton
 import com.mahi.assistant.ui.theme.*
+import com.mahi.assistant.ui.viewmodel.MahiViewModel
 
 /**
  * Data model for a routine.
@@ -31,9 +31,11 @@ data class Routine(
 
 /**
  * Routines panel — JARVIS automated sequences.
+ * Now connected to ViewModel for routine execution.
  */
 @Composable
 fun RoutinesScreen(
+    viewModel: MahiViewModel,
     onBack: () -> Unit = {},
     onActivateRoutine: (String) -> Unit = {},
     onCreateCustom: () -> Unit = {},
@@ -181,6 +183,7 @@ fun RoutinesScreen(
                         routines = routines.map {
                             it.copy(isActive = if (it.id == routine.id) !it.isActive else false)
                         }
+                        viewModel.processInput(routine.name.lowercase().replace(" ", "_") + " routine")
                         onActivateRoutine(routine.id)
                     },
                 )

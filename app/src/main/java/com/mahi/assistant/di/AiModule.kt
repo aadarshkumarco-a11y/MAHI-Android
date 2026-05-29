@@ -1,8 +1,9 @@
 package com.mahi.assistant.di
 
-import com.mahi.assistant.data.remote.GeminiApiService
 import com.mahi.assistant.data.repository.AiRepository
 import com.mahi.assistant.data.repository.AiRepositoryImpl
+import com.mahi.assistant.ai.AiConversationEngine
+import com.mahi.assistant.data.local.SettingsManager
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -16,8 +17,9 @@ object AiModule {
     @Provides
     @Singleton
     fun provideAiRepository(
-        geminiApiService: GeminiApiService
+        aiEngine: AiConversationEngine,
+        settingsManager: SettingsManager
     ): AiRepository {
-        return AiRepositoryImpl(geminiApiService)
+        return AiRepositoryImpl(aiEngine, settingsManager)
     }
 }

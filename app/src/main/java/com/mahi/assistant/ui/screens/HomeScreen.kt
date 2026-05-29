@@ -22,7 +22,7 @@ import java.util.*
 
 /**
  * The main Home Screen — the JARVIS command center.
- * Now properly connected to ViewModel for AI interaction.
+ * Connected to shared ViewModel for AI interaction.
  */
 @Composable
 fun HomeScreen(
@@ -35,6 +35,7 @@ fun HomeScreen(
     modifier: Modifier = Modifier,
 ) {
     val assistantState by viewModel.assistantState.collectAsState()
+    val settingsState by viewModel.settingsState.collectAsState()
     var textInput by remember { mutableStateOf("") }
 
     // Time-based greeting
@@ -86,6 +87,16 @@ fun HomeScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 color = TextSecondary,
             )
+
+            // Show API key warning
+            if (settingsState.geminiKey.isBlank()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Set Gemini API key in Settings first!",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Amber,
+                )
+            }
 
             Spacer(modifier = Modifier.weight(1f))
 

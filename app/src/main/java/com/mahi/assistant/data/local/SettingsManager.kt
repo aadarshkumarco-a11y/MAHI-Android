@@ -9,6 +9,9 @@ import javax.inject.Singleton
 /**
  * Manages persistent storage of API keys and user preferences
  * using SharedPreferences for simplicity and reliability.
+ *
+ * Uses commit() instead of apply() for IMMEDIATE synchronous saves,
+ * ensuring API keys are persisted before the app navigates away.
  */
 @Singleton
 class SettingsManager @Inject constructor(
@@ -32,35 +35,35 @@ class SettingsManager @Inject constructor(
     // ── API Keys ────────────────────────────────────────────────
 
     fun getGeminiApiKey(): String = prefs.getString(KEY_GEMINI_API, "") ?: ""
-    fun setGeminiApiKey(key: String) = prefs.edit().putString(KEY_GEMINI_API, key).apply()
+    fun setGeminiApiKey(key: String) = prefs.edit().putString(KEY_GEMINI_API, key).commit()
 
     fun getPorcupineKey(): String = prefs.getString(KEY_PORCUPINE_KEY, "") ?: ""
-    fun setPorcupineKey(key: String) = prefs.edit().putString(KEY_PORCUPINE_KEY, key).apply()
+    fun setPorcupineKey(key: String) = prefs.edit().putString(KEY_PORCUPINE_KEY, key).commit()
 
     fun getWeatherApiKey(): String = prefs.getString(KEY_WEATHER_API, "") ?: ""
-    fun setWeatherApiKey(key: String) = prefs.edit().putString(KEY_WEATHER_API, key).apply()
+    fun setWeatherApiKey(key: String) = prefs.edit().putString(KEY_WEATHER_API, key).commit()
 
     fun getNewsApiKey(): String = prefs.getString(KEY_NEWS_API, "") ?: ""
-    fun setNewsApiKey(key: String) = prefs.edit().putString(KEY_NEWS_API, key).apply()
+    fun setNewsApiKey(key: String) = prefs.edit().putString(KEY_NEWS_API, key).commit()
 
     // ── Voice Settings ──────────────────────────────────────────
 
     fun getVoiceSpeed(): Float = prefs.getFloat(KEY_VOICE_SPEED, 1.0f)
-    fun setVoiceSpeed(speed: Float) = prefs.edit().putFloat(KEY_VOICE_SPEED, speed).apply()
+    fun setVoiceSpeed(speed: Float) = prefs.edit().putFloat(KEY_VOICE_SPEED, speed).commit()
 
     fun getVoicePitch(): Float = prefs.getFloat(KEY_VOICE_PITCH, 1.0f)
-    fun setVoicePitch(pitch: Float) = prefs.edit().putFloat(KEY_VOICE_PITCH, pitch).apply()
+    fun setVoicePitch(pitch: Float) = prefs.edit().putFloat(KEY_VOICE_PITCH, pitch).commit()
 
     fun getWakeWord(): String = prefs.getString(KEY_WAKE_WORD, "Hey Mahi") ?: "Hey Mahi"
-    fun setWakeWord(word: String) = prefs.edit().putString(KEY_WAKE_WORD, word).apply()
+    fun setWakeWord(word: String) = prefs.edit().putString(KEY_WAKE_WORD, word).commit()
 
     // ── General Settings ────────────────────────────────────────
 
     fun getAutoStartOnBoot(): Boolean = prefs.getBoolean(KEY_AUTO_START_BOOT, true)
-    fun setAutoStartOnBoot(enabled: Boolean) = prefs.edit().putBoolean(KEY_AUTO_START_BOOT, enabled).apply()
+    fun setAutoStartOnBoot(enabled: Boolean) = prefs.edit().putBoolean(KEY_AUTO_START_BOOT, enabled).commit()
 
     fun getFloatingAssistant(): Boolean = prefs.getBoolean(KEY_FLOATING_ASSISTANT, false)
-    fun setFloatingAssistant(enabled: Boolean) = prefs.edit().putBoolean(KEY_FLOATING_ASSISTANT, enabled).apply()
+    fun setFloatingAssistant(enabled: Boolean) = prefs.edit().putBoolean(KEY_FLOATING_ASSISTANT, enabled).commit()
 
     // ── Helpers ─────────────────────────────────────────────────
 
