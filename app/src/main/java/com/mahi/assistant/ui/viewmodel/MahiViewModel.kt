@@ -134,61 +134,73 @@ class MahiViewModel @Inject constructor(
     private var processingJob: Job? = null
 
     init {
-        // Load saved messages
+        // Load saved messages (defensive — Room might not be ready)
         viewModelScope.launch {
-            val entities = messageDao.getRecent(50)
-            _messages.value = entities.map { entity: MessageEntity ->
-                ChatMessage(
-                    id = entity.id.toString(),
-                    role = if (entity.role == "USER") MessageRole.USER else MessageRole.ASSISTANT,
-                    content = entity.content,
-                    timestamp = entity.timestamp
-                )
+            try {
+                val entities = messageDao.getRecent(50)
+                _messages.value = entities.map { entity: MessageEntity ->
+                    ChatMessage(
+                        id = entity.id.toString(),
+                        role = if (entity.role == "USER") MessageRole.USER else MessageRole.ASSISTANT,
+                        content = entity.content,
+                        timestamp = entity.timestamp
+                    )
+                }
+            } catch (e: Exception) {
+                // Room not ready or corrupted — start with empty messages
             }
         }
 
         // Load settings
-        loadSettings()
+        try { loadSettings() } catch (_: Exception) { /* Settings not available */ }
 
         // Voice recognition callback
-        voiceRecognition.callback = object : VoiceRecognitionEngine.Callback {
-            override fun onResult(text: String) {
-                _isListening.value = false
-                _assistantState.value = AssistantState.IDLE
-                if (text.isNotBlank()) processInput(text)
-            }
-            override fun onPartial(text: String) { _partialTranscript.value = text }
-            override fun onError(code: Int) {
-                _isListening.value = false
-                _assistantState.value = AssistantState.IDLE
-            }
-            override fun onReady() {
-                _isListening.value = true
-                _assistantState.value = AssistantState.LISTENING
-            }
-            override fun onEnd() {
-                _isListening.value = false
-                if (_assistantState.value == AssistantState.LISTENING) {
+        try {
+            voiceRecognition.callback = object : VoiceRecognitionEngine.Callback {
+                override fun onResult(text: String) {
+                    _isListening.value = false
+                    _assistantState.value = AssistantState.IDLE
+                    if (text.isNotBlank()) processInput(text)
+                }
+                override fun onPartial(text: String) { _partialTranscript.value = text }
+                override fun onError(code: Int) {
+                    _isListening.value = false
                     _assistantState.value = AssistantState.IDLE
                 }
+                override fun onReady() {
+                    _isListening.value = true
+                    _assistantState.value = AssistantState.LISTENING
+                }
+                override fun onEnd() {
+                    _isListening.value = false
+                    if (_assistantState.value == AssistantState.LISTENING) {
+                        _assistantState.value = AssistantState.IDLE
+                    }
+                }
             }
-        }
+        } catch (_: Exception) { /* Voice recognition not available */ }
 
         // TTS callback
-        ttsEngine.callback = object : TextToSpeechEngine.Callback {
-            override fun onSpeakStart(utteranceId: String) { _assistantState.value = AssistantState.SPEAKING }
-            override fun onSpeakEnd(utteranceId: String) { _assistantState.value = AssistantState.IDLE }
-            override fun onError(utteranceId: String) { _assistantState.value = AssistantState.IDLE }
-        }
+        try {
+            ttsEngine.callback = object : TextToSpeechEngine.Callback {
+                override fun onSpeakStart(utteranceId: String) { _assistantState.value = AssistantState.SPEAKING }
+                override fun onSpeakEnd(utteranceId: String) { _assistantState.value = AssistantState.IDLE }
+                override fun onError(utteranceId: String) { _assistantState.value = AssistantState.IDLE }
+            }
+        } catch (_: Exception) { /* TTS not available */ }
 
         // Routines
         viewModelScope.launch {
-            routineEngine.availableRoutines.collect { _routines.value = it }
+            try {
+                routineEngine.availableRoutines.collect { _routines.value = it }
+            } catch (_: Exception) { /* Routine engine not available */ }
         }
 
         // Notifications
         viewModelScope.launch {
-            MahiNotificationListenerService.instance?.notifications?.collect { _notifications.value = it }
+            try {
+                MahiNotificationListenerService.instance?.notifications?.collect { _notifications.value = it }
+            } catch (_: Exception) { /* Notification listener not available */ }
         }
     }
 

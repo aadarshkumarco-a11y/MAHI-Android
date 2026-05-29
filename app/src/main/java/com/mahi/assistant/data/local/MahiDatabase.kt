@@ -12,7 +12,7 @@ import com.mahi.assistant.data.local.converter.Converters
         DeviceStateEntity::class
     ],
     version = 1,
-    exportSchema = true
+    exportSchema = false
 )
 @TypeConverters(Converters::class)
 abstract class MahiDatabase : RoomDatabase() {

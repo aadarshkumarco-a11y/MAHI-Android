@@ -37,36 +37,48 @@ class TextToSpeechEngine(
     private var pitch: Float = 1.0f
 
     init {
-        tts = TextToSpeech(context.applicationContext) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                val result = tts?.setLanguage(Locale.US)
-                if (result == TextToSpeech.LANG_MISSING_DATA ||
-                    result == TextToSpeech.LANG_NOT_SUPPORTED
-                ) {
-                    // Fall back to default locale
-                    tts?.language = Locale.getDefault()
+        // TextToSpeech constructor can throw on some devices/ROMs
+        try {
+            tts = TextToSpeech(context.applicationContext) { status ->
+                if (status == TextToSpeech.SUCCESS) {
+                    try {
+                        val result = tts?.setLanguage(Locale.US)
+                        if (result == TextToSpeech.LANG_MISSING_DATA ||
+                            result == TextToSpeech.LANG_NOT_SUPPORTED
+                        ) {
+                            tts?.language = Locale.getDefault()
+                        }
+                    } catch (_: Exception) {
+                        // Language setting failed, TTS will still work with default
+                    }
+                    try {
+                        tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                            override fun onStart(utteranceId: String) {
+                                _isSpeaking.value = true
+                                callback?.onSpeakStart(utteranceId)
+                            }
+
+                            override fun onDone(utteranceId: String) {
+                                _isSpeaking.value = false
+                                callback?.onSpeakEnd(utteranceId)
+                            }
+
+                            @Deprecated("Deprecated in API 21; onError(String) is used instead")
+                            override fun onError(utteranceId: String) {
+                                _isSpeaking.value = false
+                                callback?.onError(utteranceId)
+                            }
+                        })
+                    } catch (_: Exception) { /* Listener setup failed */ }
+                    _isReady.value = true
+                } else {
+                    _isReady.value = false
                 }
-                tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                    override fun onStart(utteranceId: String) {
-                        _isSpeaking.value = true
-                        callback?.onSpeakStart(utteranceId)
-                    }
-
-                    override fun onDone(utteranceId: String) {
-                        _isSpeaking.value = false
-                        callback?.onSpeakEnd(utteranceId)
-                    }
-
-                    @Deprecated("Deprecated in API 21; onError(String) is used instead")
-                    override fun onError(utteranceId: String) {
-                        _isSpeaking.value = false
-                        callback?.onError(utteranceId)
-                    }
-                })
-                _isReady.value = true
-            } else {
-                _isReady.value = false
             }
+        } catch (e: Exception) {
+            // TTS not available on this device
+            tts = null
+            _isReady.value = false
         }
     }
 

@@ -6,9 +6,6 @@ import com.mahi.assistant.data.local.DeviceStateDao
 import com.mahi.assistant.data.local.MahiDatabase
 import com.mahi.assistant.data.local.MessageDao
 import com.mahi.assistant.data.local.RoutineDao
-import com.mahi.assistant.data.local.converter.Converters
-import com.google.gson.Gson
-import javax.inject.Named
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -23,15 +20,13 @@ object DatabaseModule {
     @Provides
     @Singleton
     fun provideMahiDatabase(
-        @ApplicationContext context: Context,
-        gson: Gson
+        @ApplicationContext context: Context
     ): MahiDatabase {
         return Room.databaseBuilder(
             context,
             MahiDatabase::class.java,
             MahiDatabase.DATABASE_NAME
         )
-            .addTypeConverter(Converters())
             .fallbackToDestructiveMigration()
             .build()
     }

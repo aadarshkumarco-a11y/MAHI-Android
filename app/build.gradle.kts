@@ -20,13 +20,6 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
-
-        // Room schema export directory
-        javaCompileOptions {
-            annotationProcessorOptions {
-                arguments["room.schemaLocation"] = "$projectDir/schemas"
-            }
-        }
     }
 
     signingConfigs {
