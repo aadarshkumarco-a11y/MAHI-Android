@@ -600,59 +600,59 @@ class MahiViewModel @Inject constructor(
     // WEATHER — Open-Meteo (FREE, No API key!) + OWM fallback
     // ══════════════════════════════════════════════════════════════════════
 
-    private suspend fun fetchWeather(city: String): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+    private suspend fun fetchWeather(city: String): String {
         _weatherState.value = _weatherState.value.copy(isLoading = true)
-        // Use settings default city if none provided
         val cityName = city.ifBlank { settingsManager.getDefaultCity() }
 
-        // Try Open-Meteo first (FREE, no API key)
         return try {
-            val geocoder = Geocoder(appContext, Locale.getDefault())
-            val addresses = geocoder.getFromLocationName(cityName, 1)
-            if (addresses.isNullOrEmpty()) {
-                _weatherState.value = _weatherState.value.copy(isLoading = false)
-                return "I couldn't find $cityName. Try a different city name."
-            }
-            val address = addresses[0]
-            val lat = address.latitude
-            val lon = address.longitude
-            val resolvedCity = address.locality ?: cityName
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val geocoder = Geocoder(appContext, Locale.getDefault())
+                val addresses = geocoder.getFromLocationName(cityName, 1)
+                if (addresses.isNullOrEmpty()) {
+                    _weatherState.value = _weatherState.value.copy(isLoading = false)
+                    return@withContext "I couldn't find $cityName. Try a different city name."
+                }
+                val address = addresses[0]
+                val lat = address.latitude
+                val lon = address.longitude
+                val resolvedCity = address.locality ?: cityName
 
-            // Call Open-Meteo API (completely free!)
-            val openMeteoUrl = "https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&timezone=auto"
-            val client = okhttp3.OkHttpClient.Builder().connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS).build()
-            val request = okhttp3.Request.Builder().url(openMeteoUrl).build()
-            val response = client.newCall(request).execute()
-            val body = response.body?.string()
+                // Call Open-Meteo API (completely free!)
+                val openMeteoUrl = "https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&timezone=auto"
+                val client = okhttp3.OkHttpClient.Builder().connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS).build()
+                val request = okhttp3.Request.Builder().url(openMeteoUrl).build()
+                val response = client.newCall(request).execute()
+                val body = response.body?.string()
 
-            if (body != null) {
-                val gson = com.google.gson.Gson()
-                val weatherData = gson.fromJson(body, OpenMeteoResponse::class.java)
-                val current = weatherData.current
+                if (body != null) {
+                    val gson = com.google.gson.Gson()
+                    val weatherData = gson.fromJson(body, OpenMeteoResponse::class.java)
+                    val current = weatherData.current
 
-                if (current != null) {
-                    val temp = current.temperature_2m?.toInt() ?: 0
-                    val feelsLike = current.apparent_temperature?.toInt() ?: temp
-                    val humidity = current.relative_humidity_2m?.toInt() ?: 0
-                    val windSpeed = current.wind_speed_10m ?: 0.0
-                    val desc = weatherCodeToText(current.weather_code ?: 0)
+                    if (current != null) {
+                        val temp = current.temperature_2m?.toInt() ?: 0
+                        val feelsLike = current.apparent_temperature?.toInt() ?: temp
+                        val humidity = current.relative_humidity_2m?.toInt() ?: 0
+                        val windSpeed = current.wind_speed_10m ?: 0.0
+                        val desc = weatherCodeToText(current.weather_code ?: 0)
 
-                    _weatherState.value = WeatherUiState(
-                        city = resolvedCity,
-                        temperature = temp.toDouble(),
-                        description = desc,
-                        humidity = humidity,
-                        windSpeed = windSpeed,
-                        feelsLike = feelsLike.toDouble(),
-                        isLoading = false
-                    )
-                    navigateTo("weather")
-                    "Weather in $resolvedCity: $temp degrees, $desc. Feels like $feelsLike degrees. Humidity $humidity%. Wind speed ${String.format("%.1f", windSpeed)} km/h."
+                        _weatherState.value = WeatherUiState(
+                            city = resolvedCity,
+                            temperature = temp.toDouble(),
+                            description = desc,
+                            humidity = humidity,
+                            windSpeed = windSpeed,
+                            feelsLike = feelsLike.toDouble(),
+                            isLoading = false
+                        )
+                        navigateTo("weather")
+                        "Weather in $resolvedCity: $temp degrees, $desc. Feels like $feelsLike degrees. Humidity $humidity%. Wind speed ${String.format("%.1f", windSpeed)} km/h."
+                    } else {
+                        fallbackWeather(cityName)
+                    }
                 } else {
                     fallbackWeather(cityName)
                 }
-            } else {
-                fallbackWeather(cityName)
             }
         } catch (e: Exception) {
             fallbackWeather(cityName)
@@ -1588,34 +1588,51 @@ class MahiViewModel @Inject constructor(
         val stateValue: Int  // 1 = on, 0 = off, -1 = toggle
 
         when {
-            // Explicit on/off patterns: "flashlight_on", "wifi_off", "bluetooth_on", etc.
-            lowerAction.matches(".*(flashlight|torch)_?(on|off|jala|bujha).*") -> {
+            // Flashlight / Torch
+            lowerAction.contains("flashlight") || lowerAction.contains("torch") -> {
                 device = "flashlight"
-                stateValue = if (lowerAction.contains("on") || lowerAction.contains("jala")) 1 else 0
+                stateValue = when {
+                    lowerAction.contains("on") || lowerAction.contains("jala") -> 1
+                    lowerAction.contains("off") || lowerAction.contains("bujha") -> 0
+                    else -> -1
+                }
             }
-            lowerAction.matches(".*wifi_?(on|off).*") -> {
+            // WiFi
+            lowerAction.contains("wifi") -> {
                 device = "wifi"
-                stateValue = if (lowerAction.contains("on")) 1 else 0
+                stateValue = when {
+                    lowerAction.contains("on") -> 1
+                    lowerAction.contains("off") -> 0
+                    else -> -1
+                }
             }
-            lowerAction.matches(".*bluetooth_?(on|off).*") -> {
+            // Bluetooth
+            lowerAction.contains("bluetooth") -> {
                 device = "bluetooth"
-                stateValue = if (lowerAction.contains("on")) 1 else 0
+                stateValue = when {
+                    lowerAction.contains("on") -> 1
+                    lowerAction.contains("off") -> 0
+                    else -> -1
+                }
             }
-            lowerAction.matches(".*(brightness|screen_brightness)_?\\d+.*") -> {
+            // Brightness
+            lowerAction.contains("brightness") -> {
                 device = "brightness"
                 val level = lowerAction.filter { it.isDigit() }.toIntOrNull()?.coerceIn(0, 255) ?: 128
                 val result = deviceControlManager.setBrightness(level)
                 refreshDeviceState()
                 return if (result.isSuccess) "Brightness set to $level." else "Couldn't set brightness. Check permissions."
             }
-            lowerAction.matches(".*volume_?\\d+.*") -> {
+            // Volume
+            lowerAction.contains("volume") -> {
                 device = "volume"
                 val level = lowerAction.filter { it.isDigit() }.toIntOrNull()?.coerceIn(0, 15) ?: 7
                 val result = deviceControlManager.setVolume(level)
                 refreshDeviceState()
                 return if (result.isSuccess) "Volume set to $level." else "Couldn't set volume. Check permissions."
             }
-            lowerAction.matches(".*(silent|vibrate|normal)_?mode?.*") -> {
+            // Ringer Mode
+            lowerAction.contains("silent") || lowerAction.contains("vibrate") || lowerAction.contains("normal") && lowerAction.contains("mode") -> {
                 device = "ringer_mode"
                 val mode = when {
                     lowerAction.contains("silent") -> 0
@@ -1626,21 +1643,41 @@ class MahiViewModel @Inject constructor(
                 refreshDeviceState()
                 return if (result.isSuccess) "Ringer mode set to ${if (mode == 0) "silent" else if (mode == 1) "vibrate" else "normal"}." else "Couldn't change ringer mode."
             }
-            lowerAction.matches(".*dnd_?(on|off).*") || lowerAction.contains("do_not_disturb") -> {
+            // DND
+            lowerAction.contains("dnd") || lowerAction.contains("do_not_disturb") -> {
                 device = "dnd"
-                stateValue = if (lowerAction.contains("on")) 1 else 0
+                stateValue = when {
+                    lowerAction.contains("on") -> 1
+                    lowerAction.contains("off") -> 0
+                    else -> -1
+                }
             }
-            lowerAction.matches(".*hotspot_?(on|off).*") -> {
+            // Hotspot
+            lowerAction.contains("hotspot") -> {
                 device = "hotspot"
-                stateValue = if (lowerAction.contains("on")) 1 else 0
+                stateValue = when {
+                    lowerAction.contains("on") -> 1
+                    lowerAction.contains("off") -> 0
+                    else -> -1
+                }
             }
-            lowerAction.matches(".*rotate_?(on|off).*") || lowerAction.contains("auto_rotate") -> {
+            // Auto-rotate
+            lowerAction.contains("rotate") || lowerAction.contains("auto_rotate") -> {
                 device = "auto_rotate"
-                stateValue = if (lowerAction.contains("on")) 1 else 0
+                stateValue = when {
+                    lowerAction.contains("on") -> 1
+                    lowerAction.contains("off") -> 0
+                    else -> -1
+                }
             }
-            lowerAction.matches(".*mobile_?data_?(on|off).*") -> {
+            // Mobile Data
+            lowerAction.contains("mobile_data") || lowerAction.contains("mobiledata") -> {
                 device = "mobile_data"
-                stateValue = if (lowerAction.contains("on")) 1 else 0
+                stateValue = when {
+                    lowerAction.contains("on") -> 1
+                    lowerAction.contains("off") -> 0
+                    else -> -1
+                }
             }
             // Generic toggle patterns
             lowerAction.startsWith("toggle_") -> {
