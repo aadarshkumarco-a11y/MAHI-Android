@@ -57,6 +57,8 @@ fun SettingsScreen(
     // Toggles - from persisted state
     var autoStartOnBoot by remember(settingsState.autoStartOnBoot) { mutableStateOf(settingsState.autoStartOnBoot) }
     var floatingAssistant by remember(settingsState.floatingAssistant) { mutableStateOf(settingsState.floatingAssistant) }
+    var continuousMode by remember(settingsState.continuousMode) { mutableStateOf(settingsState.continuousMode) }
+    var defaultCity by remember(settingsState.defaultCity) { mutableStateOf(settingsState.defaultCity) }
 
     Column(
         modifier = modifier
@@ -320,6 +322,65 @@ fun SettingsScreen(
                                 viewModel.updateFloatingAssistant(it)
                             },
                         )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Continuous Mode
+                        SettingToggle(
+                            title = "Continuous Mode",
+                            description = "Keep listening after each response",
+                            isOn = continuousMode,
+                            onToggle = {
+                                continuousMode = it
+                                viewModel.updateContinuousMode(it)
+                            },
+                        )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Default City
+                        Text(
+                            text = "DEFAULT CITY FOR WEATHER",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextTertiary,
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        OutlinedTextField(
+                            value = defaultCity,
+                            onValueChange = {
+                                defaultCity = it
+                                viewModel.updateDefaultCity(it)
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            placeholder = {
+                                Text(
+                                    text = "Enter city name...",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = TextTertiary,
+                                )
+                            },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = NeonCyan.copy(alpha = 0.5f),
+                                unfocusedBorderColor = DarkPanelBorder,
+                                focusedContainerColor = DeepSpaceBlack,
+                                unfocusedContainerColor = DeepSpaceBlack,
+                                cursorColor = NeonCyan,
+                                focusedTextColor = TextPrimary,
+                                unfocusedTextColor = TextPrimary,
+                            ),
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                            textStyle = MaterialTheme.typography.labelMedium,
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Gemini API key hint
+                        Text(
+                            text = "TIP: Add multiple Gemini keys separated by commas for fallback",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Amber,
+                        )
                     }
                 }
             }
@@ -372,7 +433,7 @@ fun SettingsScreen(
                                 color = TextPrimary,
                             )
                             Text(
-                                text = "v1.0.0",
+                                text = "v2.0.0",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = NeonCyan,
                             )

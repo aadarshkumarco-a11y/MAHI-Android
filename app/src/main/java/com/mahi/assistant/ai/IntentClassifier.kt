@@ -4,15 +4,14 @@ import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
 
 /**
- * MAX INTELLIGENCE IntentClassifier.
+ * JARVIS-LEVEL IntentClassifier — AI-PRIMARY Classification.
  *
  * Strategy:
- * 1. Fast path: Regex patterns for common commands (instant, no API call)
- * 2. Smart path: Gemini AI classifies the intent for ANY natural language input
+ * 1. Ultra-fast path: Regex for OBVIOUS instant commands (flashlight, battery, time) — no API call
+ * 2. AI-first path: Gemini returns structured JSON for EVERYTHING else
+ * 3. Keyword fallback: If AI fails, basic keyword matching as last resort
  *
- * This means MAHI understands "play carryminati latest video on youtube",
- * "text ayush in WhatsApp that he needs to call me", "aaj ka mausam kaisa hai",
- * "top 10 bihar breaking news" — ANY phrasing!
+ * This means MAHI understands "kisi bhi tarah bolo" — ANY phrasing in ANY language!
  */
 class IntentClassifier(
     private val aiEngine: AiConversationEngine? = null
@@ -25,6 +24,7 @@ class IntentClassifier(
         YOUTUBE,
         CALL,
         SMS,
+        SMS_READ,
         WHATSAPP,
         ALARM,
         REMINDER,
@@ -39,6 +39,15 @@ class IntentClassifier(
         CALL_LOG,
         TIME_DATE,
         FIND_PHONE,
+        NOTE_SAVE,
+        NOTE_READ,
+        CONTACT_SEARCH,
+        TIMER,
+        TRANSLATE,
+        CALCULATE,
+        CONTINUOUS_MODE,
+        CAMERA,
+        FILE_OPEN,
         GENERAL_CHAT
     }
 
@@ -50,8 +59,8 @@ class IntentClassifier(
     )
 
     // ──────────────────────────────────────────────────────────────────────────
-    // Quick-match patterns (FAST PATH — no AI call needed)
-    // These are the most common, unambiguous commands.
+    // Ultra-fast patterns — INSTANT, no AI call needed
+    // Only the most obvious, unambiguous commands go here
     // ──────────────────────────────────────────────────────────────────────────
 
     private data class QuickPattern(
@@ -61,131 +70,121 @@ class IntentClassifier(
         val paramExtractor: ((MatchResult, String) -> Map<String, String>)? = null
     )
 
-    private val quickPatterns: List<QuickPattern> = listOf(
+    private val ultraFastPatterns: List<QuickPattern> = listOf(
 
-        // ── YOUTUBE (specific search) ──────────────────────────────────────
-        QuickPattern(IntentType.YOUTUBE, "search_youtube",
-            Regex("(?i)\\b(?:play|watch|search|find|open)\\s+(.+?)\\s+(?:on\\s+)?(?:youtube|yt)\\b"),
-            { m, _ -> mapOf("query" to m.groupValues[1].trim()) }
-        ),
-        QuickPattern(IntentType.YOUTUBE, "search_youtube",
-            Regex("(?i)\\byoutube\\s+(?:pe\\s+)?(?:play|search|find|watch)\\s+(.+)\\b"),
-            { m, _ -> mapOf("query" to m.groupValues[1].trim()) }
-        ),
-        QuickPattern(IntentType.YOUTUBE, "open_youtube",
-            Regex("(?i)\\b(?:open|launch|start)\\s+(?:the\\s+)?youtube\\b"),
-            { _, _ -> mapOf("query" to "") }
-        ),
-
-        // ── WHATSAPP ──────────────────────────────────────────────────────
-        QuickPattern(IntentType.WHATSAPP, "send_whatsapp",
-            Regex("(?i)(?:text|message|send|msg|whatsapp|wa)\\s+(.+?)\\s+(?:on\\s+)?(?:whatsapp|wa|wt)\\s+(?:that\\s+)?(.+)"),
-            { m, _ -> mapOf("contact" to m.groupValues[1].trim(), "message" to m.groupValues[2].trim()) }
-        ),
-        QuickPattern(IntentType.WHATSAPP, "send_whatsapp",
-            Regex("(?i)(?:whatsapp|wa|wt)\\s+(.+?)\\s+(?:that\\s+)?(.+)"),
-            { m, _ -> mapOf("contact" to m.groupValues[1].trim(), "message" to m.groupValues[2].trim()) }
-        ),
-        QuickPattern(IntentType.WHATSAPP, "open_whatsapp_chat",
-            Regex("(?i)(?:open|chat|message|text)\\s+(.+?)\\s+(?:on\\s+)?(?:whatsapp|wa|wt)\\b"),
-            { m, _ -> mapOf("contact" to m.groupValues[1].trim()) }
-        ),
-        QuickPattern(IntentType.WHATSAPP, "open_whatsapp_chat",
-            Regex("(?i)(?:whatsapp|wa)\\s+(?:pe\\s+)?(?:message|text|chat|msg)\\s+(.+)\\b"),
-            { m, _ -> mapOf("contact" to m.groupValues[1].trim()) }
-        ),
-
-        // ── CALL with SIM ─────────────────────────────────────────────────
-        QuickPattern(IntentType.CALL, "make_call",
-            Regex("(?i)\\b(?:call|phone|ring|dial)\\s+(.+?)\\s+(?:from|using|on)\\s+(?:sim|sim\\s*card)\\s*(\\d)\\b"),
-            { m, _ -> mapOf("contact" to m.groupValues[1].trim(), "sim" to m.groupValues[2].trim()) }
-        ),
-        QuickPattern(IntentType.CALL, "make_call",
-            Regex("(?i)\\b(?:call|phone|ring|dial)\\s+(.+)\\b"),
-            { m, _ -> mapOf("contact" to m.groupValues[1].trim()) }
-        ),
-
-        // ── MEDIA CONTROL ─────────────────────────────────────────────────
-        QuickPattern(IntentType.MEDIA_CONTROL, "play",
-            Regex("(?i)\\b(?:play|resume)\\s+(?:music|song|audio|video)?\\s*$"),
-            { _, _ -> mapOf("action" to "play") }
-        ),
-        QuickPattern(IntentType.MEDIA_CONTROL, "pause",
-            Regex("(?i)\\b(?:pause|stop)\\s+(?:the\\s+)?(?:music|song|audio|video|playback)?\\s*$"),
-            { _, _ -> mapOf("action" to "pause") }
-        ),
-        QuickPattern(IntentType.MEDIA_CONTROL, "next",
-            Regex("(?i)\\b(?:next|skip|forward)\\s+(?:song|track|music)?\\s*$"),
-            { _, _ -> mapOf("action" to "next") }
-        ),
-        QuickPattern(IntentType.MEDIA_CONTROL, "previous",
-            Regex("(?i)\\b(?:previous|prev|back|rewind)\\s+(?:song|track|music)?\\s*$"),
-            { _, _ -> mapOf("action" to "previous") }
-        ),
-
-        // ── FLASHLIGHT ────────────────────────────────────────────────────
+        // ── FLASHLIGHT — ultra obvious ────────────────────────────────────
         QuickPattern(IntentType.DEVICE_CONTROL, "flashlight_on",
-            Regex("(?i)\\b(?:turn on|switch on|enable)\\s+(?:the\\s+)?(?:flashlight|torch)\\b")),
+            Regex("(?i)\\b(?:turn on|switch on|enable|on karo|jala)\\s+(?:the\\s+)?(?:flashlight|torch|flash|light)\\b")),
         QuickPattern(IntentType.DEVICE_CONTROL, "flashlight_off",
-            Regex("(?i)\\b(?:turn off|switch off|disable)\\s+(?:the\\s+)?(?:flashlight|torch)\\b")),
+            Regex("(?i)\\b(?:turn off|switch off|disable|off karo|bujha)\\s+(?:the\\s+)?(?:flashlight|torch|flash|light)\\b")),
 
-        // ── WEATHER ───────────────────────────────────────────────────────
-        QuickPattern(IntentType.WEATHER, "get_weather",
-            Regex("(?i)\\bweather\\s+in\\s+(.+)\\b"),
-            { m, _ -> mapOf("city" to m.groupValues[1].trim()) }
-        ),
+        // ── BATTERY — ultra obvious ───────────────────────────────────────
+        QuickPattern(IntentType.BATTERY, "battery_status",
+            Regex("(?i)\\b(?:battery|charge|charging|battery kitni|charge kitna)\\s*(?:level|status|percentage|info|check|hai|kitni|kitna)?\\s*\\b")),
 
-        // ── NEWS ──────────────────────────────────────────────────────────
-        QuickPattern(IntentType.NEWS, "get_news",
-            Regex("(?i)\\bnews\\s+(?:about|on|for)\\s+(.+)\\b"),
-            { m, _ -> mapOf("topic" to m.groupValues[1].trim()) }
-        ),
+        // ── TIME/DATE — ultra obvious ─────────────────────────────────────
+        QuickPattern(IntentType.TIME_DATE, "get_time",
+            Regex("(?i)\\b(?:what'?s\\s+)?(?:the\\s+)?(?:time|clock|samay|baje|kitne baje)\\b")),
+        QuickPattern(IntentType.TIME_DATE, "get_date",
+            Regex("(?i)\\b(?:what'?s\\s+)?(?:the\\s+)?(?:date|day|today|tarikh|din|aaj)\\b")),
 
-        // ── REMINDER ──────────────────────────────────────────────────────
-        QuickPattern(IntentType.REMINDER, "set_reminder",
-            Regex("(?i)\\bremind\\s+(?:me\\s+)?(?:to\\s+)?(.+?)\\s+(?:at|by|in|on)\\s+(.+)\\b"),
-            { m, _ -> mapOf("task" to m.groupValues[1].trim(), "time" to m.groupValues[2].trim()) }
-        ),
-
-        // ── FIND PHONE ────────────────────────────────────────────────────
+        // ── FIND PHONE — ultra obvious ────────────────────────────────────
         QuickPattern(IntentType.FIND_PHONE, "find_phone",
             Regex("(?i)\\b(?:find|locate|ring|track)\\s+(?:my\\s+)?(?:phone|device|mobile)\\b")),
 
-        // ── BATTERY ───────────────────────────────────────────────────────
-        QuickPattern(IntentType.BATTERY, "battery_status",
-            Regex("(?i)\\b(?:battery|charge|charging)\\s+(?:level|status|percentage|info|check)?\\b")),
+        // ── CAMERA — ultra obvious ────────────────────────────────────────
+        QuickPattern(IntentType.CAMERA, "open_camera",
+            Regex("(?i)\\b(?:open|launch)\\s+(?:the\\s+)?(?:camera)\\b")),
+        QuickPattern(IntentType.CAMERA, "take_photo",
+            Regex("(?i)\\b(?:take|click|snap|capture|shoot)\\s+(?:a\\s+)?(?:photo|picture|pic|selfie)\\b")),
+        QuickPattern(IntentType.CAMERA, "take_photo",
+            Regex("(?i)\\b(?:photo|picture|pic|selfie)\\s+(?:kheencho|lo|lena)\\b")),
+        QuickPattern(IntentType.CAMERA, "take_photo",
+            Regex("(?i)\\bphoto\\s+kheencho\\b")),
 
-        // ── CALL LOG ──────────────────────────────────────────────────────
-        QuickPattern(IntentType.CALL_LOG, "read_calls",
-            Regex("(?i)\\b(?:call|phone)\\s+(?:history|log|records?|list)\\b")),
-
-        // ── TIME/DATE ─────────────────────────────────────────────────────
-        QuickPattern(IntentType.TIME_DATE, "get_time",
-            Regex("(?i)\\b(?:what'?s\\s+)?(?:the\\s+)?(?:time|clock)\\b")),
-        QuickPattern(IntentType.TIME_DATE, "get_date",
-            Regex("(?i)\\b(?:what'?s\\s+)?(?:the\\s+)?(?:date|day|today)\\b")),
-
-        // ── ALARM ─────────────────────────────────────────────────────────
-        QuickPattern(IntentType.ALARM, "set_alarm",
-            Regex("(?i)\\bset\\s+(?:an?\\s+)?alarm\\s+(?:for\\s+)?(.+)\\b"),
-            { m, _ -> mapOf("time" to m.groupValues[1].trim()) }
-        ),
-
-        // ── APP LAUNCH ────────────────────────────────────────────────────
-        QuickPattern(IntentType.APP_LAUNCH, "open_app",
-            Regex("(?i)\\b(?:open|launch|start)\\s+(.+)\\b"),
-            { m, _ -> mapOf("app" to m.groupValues[1].trim().lowercase()) }
-        ),
+        // ── CONTINUOUS MODE ───────────────────────────────────────────────
+        QuickPattern(IntentType.CONTINUOUS_MODE, "enable_continuous",
+            Regex("(?i)\\b(?:enable|turn on|start)\\s+(?:the\\s+)?(?:continuous|always\\s*listening|call\\s*type)\\s*(?:mode)?\\b")),
+        QuickPattern(IntentType.CONTINUOUS_MODE, "disable_continuous",
+            Regex("(?i)\\b(?:disable|turn off|stop)\\s+(?:the\\s+)?(?:continuous|always\\s*listening|call\\s*type)\\s*(?:mode)?\\b")),
     )
 
     // ──────────────────────────────────────────────────────────────────────────
-    // Classification
+    // AI Classification Prompt — THE BRAIN
+    // ──────────────────────────────────────────────────────────────────────────
+
+    private val CLASSIFICATION_PROMPT = """
+You are MAHI's intent classifier. Classify the user input into EXACTLY ONE intent type and extract parameters.
+Respond ONLY with valid JSON, nothing else. No markdown, no explanation, JUST JSON.
+
+Available types:
+- DEVICE_CONTROL: Toggle flashlight, wifi, bluetooth, brightness, volume, DND, etc.
+- WEATHER: Any weather/temperature/mausam question
+- NEWS: Any news/headlines/breaking news/khabar request
+- YOUTUBE: Play/search/watch something on YouTube
+- CALL: Make a phone call to someone
+- SMS: Send a text message (regular SMS)
+- SMS_READ: Read SMS inbox messages
+- WHATSAPP: Send a WhatsApp message or open WhatsApp chat
+- ALARM: Set an alarm
+- REMINDER: Set a reminder
+- ROUTINE: Morning/night routine
+- CALENDAR: Calendar/schedule related
+- NOTIFICATION: Read/check notifications
+- APP_LAUNCH: Open/launch an app
+- WEB_SEARCH: Search the web for information
+- MEDIA_CONTROL: Play/pause/next/previous music or media
+- LOCATION: Where am I / nearby places / directions
+- BATTERY: Battery level/status
+- CALL_LOG: Call history / recent calls
+- TIME_DATE: What time/date is it
+- FIND_PHONE: Find/locate/ring my phone
+- NOTE_SAVE: Save a note/memory/reminder to remember something
+- NOTE_READ: Recall/read saved notes/memories
+- CONTACT_SEARCH: Find/search contact details by name
+- TIMER: Set a timer/stopwatch
+- TRANSLATE: Translate text from one language to another
+- CALCULATE: Math calculation or expression evaluation
+- CONTINUOUS_MODE: Toggle always-listening/continuous conversation mode
+- CAMERA: Open camera or take a photo/selfie
+- FILE_OPEN: Open files/downloads folder/file manager
+- GENERAL_CHAT: General conversation that doesn't fit above
+
+Examples:
+- "play carryminati latest video on youtube" → {"type":"YOUTUBE","action":"search_youtube","params":{"query":"carryminati latest video"}}
+- "call ayush from sim 1" → {"type":"CALL","action":"make_call","params":{"contact":"ayush","sim":"1"}}
+- "text ayush in whatsapp that he needs to call me" → {"type":"WHATSAPP","action":"send_whatsapp","params":{"contact":"ayush","message":"he needs to call me"}}
+- "aaj ka mausam kaisa hai" → {"type":"WEATHER","action":"get_weather","params":{}}
+- "top 10 bihar breaking news" → {"type":"NEWS","action":"get_news","params":{"topic":"bihar","count":"10"}}
+- "yaad rakhna kal exam hai" → {"type":"NOTE_SAVE","action":"save_note","params":{"note":"kal exam hai"}}
+- "kya note save hai" → {"type":"NOTE_READ","action":"read_notes","params":{}}
+- "ayush ka number batao" → {"type":"CONTACT_SEARCH","action":"find_contact","params":{"contact":"ayush"}}
+- "5 minute timer lagao" → {"type":"TIMER","action":"set_timer","params":{"duration":"5 minutes"}}
+- "hello kaise ho" → {"type":"GENERAL_CHAT","action":"chat","params":{}}
+- "2 + 2 kitna hota hai" → {"type":"CALCULATE","action":"calculate","params":{"expression":"2 + 2"}}
+- "photo kheencho" → {"type":"CAMERA","action":"open_camera","params":{}}
+- "translate hello to hindi" → {"type":"TRANSLATE","action":"translate","params":{"text":"hello","target_lang":"hindi"}}
+- "kisi bhi tarah bolo whatsapp pe message karo" → {"type":"WHATSAPP","action":"open_whatsapp_chat","params":{"contact":""}}
+- "continuous mode chalu karo" → {"type":"CONTINUOUS_MODE","action":"enable_continuous","params":{}}
+- "file manager kholo" → {"type":"FILE_OPEN","action":"open_files","params":{}}
+- "sms padho" → {"type":"SMS_READ","action":"read_sms","params":{}}
+- "mujhe apne messages dikhao" → {"type":"SMS_READ","action":"read_sms","params":{}}
+
+IMPORTANT: If the user is just chatting/greeting/asking questions, use GENERAL_CHAT.
+If they want to save/remember something, use NOTE_SAVE.
+If they want to recall what they saved, use NOTE_READ.
+
+User input: """.trimIndent()
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Classification Entry Points
     // ──────────────────────────────────────────────────────────────────────────
 
     /**
      * Classify user input.
-     * 1. Try quick regex patterns first (instant, offline)
-     * 2. If no match, use Gemini AI to understand (max intelligence)
+     * 1. Ultra-fast regex for OBVIOUS commands (instant, offline)
+     * 2. Gemini AI for EVERYTHING else (max intelligence)
+     * 3. Keyword fallback if AI fails
      */
     suspend fun classify(input: String): IntentResult {
         val trimmedInput = input.trim()
@@ -194,8 +193,8 @@ class IntentClassifier(
                 response = "I didn't catch that. Could you please repeat?")
         }
 
-        // Step 1: Quick regex match
-        for (qp in quickPatterns) {
+        // Step 1: Ultra-fast regex match for obvious commands
+        for (qp in ultraFastPatterns) {
             val match = qp.pattern.find(trimmedInput)
             if (match != null) {
                 val params = qp.paramExtractor?.invoke(match, trimmedInput) ?: emptyMap()
@@ -208,8 +207,8 @@ class IntentClassifier(
             return classifyWithAi(trimmedInput)
         }
 
-        // Fallback
-        return IntentResult(IntentType.GENERAL_CHAT, "general_conversation")
+        // Step 3: Fallback
+        return keywordFallback(trimmedInput)
     }
 
     /**
@@ -221,7 +220,7 @@ class IntentClassifier(
             return IntentResult(IntentType.GENERAL_CHAT, "empty_input")
         }
 
-        for (qp in quickPatterns) {
+        for (qp in ultraFastPatterns) {
             val match = qp.pattern.find(trimmedInput)
             if (match != null) {
                 val params = qp.paramExtractor?.invoke(match, trimmedInput) ?: emptyMap()
@@ -229,68 +228,37 @@ class IntentClassifier(
             }
         }
 
-        return IntentResult(IntentType.GENERAL_CHAT, "general_conversation")
+        return keywordFallback(trimmedInput)
     }
 
     // ──────────────────────────────────────────────────────────────────────────
-    // Gemini AI Classification — THE BRAIN
+    // Gemini AI Classification — AI-FIRST BRAIN
     // ──────────────────────────────────────────────────────────────────────────
 
     private suspend fun classifyWithAi(input: String): IntentResult {
-        val prompt = """
-You are the intent classifier for MAHI, a voice assistant. Classify the user's input into EXACTLY ONE of these intent types:
-
-- DEVICE_CONTROL: Toggle flashlight, wifi, bluetooth, brightness, volume, DND, etc.
-- WEATHER: Any weather/temperature/mausam question
-- NEWS: Any news/headlines/breaking news request
-- YOUTUBE: Play/search/watch something on YouTube
-- CALL: Make a phone call to someone
-- SMS: Send a text message (regular SMS)
-- WHATSAPP: Send a WhatsApp message or open WhatsApp chat
-- ALARM: Set an alarm
-- REMINDER: Set a reminder (different from alarm - reminders have a task description)
-- ROUTINE: Morning/night routine
-- CALENDAR: Calendar/schedule related
-- NOTIFICATION: Read/check notifications
-- APP_LAUNCH: Open/launch an app
-- WEB_SEARCH: Search the web for information
-- MEDIA_CONTROL: Play/pause/next/previous music or media
-- LOCATION: Where am I / nearby places / directions
-- BATTERY: Battery level/status
-- CALL_LOG: Call history / recent calls
-- TIME_DATE: What time/date is it
-- FIND_PHONE: Find/locate/ring my phone
-- GENERAL_CHAT: General conversation that doesn't fit above
-
-Extract relevant parameters. For example:
-- "play carryminati latest video on youtube" → type:YOUTUBE, query:"carryminati latest video"
-- "call ayush from sim 1" → type:CALL, contact:"ayush", sim:"1"
-- "text ayush in whatsapp that he needs to call me" → type:WHATSAPP, contact:"ayush", message:"he needs to call me"
-- "aaj ka mausam kaisa hai" → type:WEATHER, city:"" (use default)
-- "top 10 bihar breaking news" → type:NEWS, topic:"bihar", count:"10"
-- "remind me to buy milk at 5pm" → type:REMINDER, task:"buy milk", time:"5pm"
-- "battery kitni hai" → type:BATTERY
-- "kal ayush ne call kiya tha" → type:CALL_LOG, contact:"ayush"
-
-Respond ONLY with valid JSON, nothing else:
-{"type":"INTENT_TYPE","action":"action_name","params":{"key":"value"}}
-
-User input: $input
-        """.trimIndent()
+        val prompt = CLASSIFICATION_PROMPT + input
 
         return try {
-            val aiResponse = aiEngine!!.queryOnce(prompt)
+            val aiResponse = aiEngine!!.classifyIntent(prompt)
             parseAiClassification(aiResponse, input)
         } catch (_: Exception) {
-            // AI failed — try basic keyword matching as last resort
+            // AI failed — try keyword matching as last resort
             keywordFallback(input)
         }
     }
 
     private fun parseAiClassification(response: String, originalInput: String): IntentResult {
         return try {
-            // Extract JSON from response
-            val jsonMatch = Regex("\\{[^{}]*\\}").find(response) ?: return keywordFallback(originalInput)
+            // Extract JSON from response — handle markdown code blocks too
+            var cleaned = response.trim()
+            // Remove markdown code block if present
+            if (cleaned.startsWith("```")) {
+                cleaned = cleaned.replace(Regex("^```(?:json)?\\s*"), "").replace(Regex("\\s*```$"), "")
+            }
+
+            val jsonMatch = Regex("\\{[^{}]*(?:\\{[^{}]*\\}[^{}]*)*\\}").find(cleaned)
+                ?: Regex("\\{[^{}]*\\}").find(cleaned)
+                ?: return keywordFallback(originalInput)
             val json = jsonMatch.value
 
             val gson = Gson()
@@ -314,22 +282,22 @@ User input: $input
 
     /**
      * Last-resort keyword matching when AI is unavailable.
+     * Expanded with new intent types and better Hindi/Hinglish support.
      */
     private fun keywordFallback(input: String): IntentResult {
         val lower = input.lowercase()
 
-        // Check for keywords
         return when {
             // YouTube
             lower.contains("youtube") || lower.contains("yt") || lower.contains("video") ->
-                IntentResult(IntentType.YOUTUBE, "search_youtube", mapOf("query" to extractTopic(lower, listOf("youtube", "yt", "video", "play", "watch"))))
+                IntentResult(IntentType.YOUTUBE, "search_youtube", mapOf("query" to extractTopic(lower, listOf("youtube", "yt", "video", "play", "watch", "chalao"))))
 
             // WhatsApp
             lower.contains("whatsapp") || lower.contains("wa ") || lower.contains("watsapp") ->
-                IntentResult(IntentType.WHATSAPP, "open_whatsapp_chat", mapOf("contact" to extractContact(lower)))
+                IntentResult(IntentType.WHATSAPP, "send_whatsapp", mapOf("contact" to extractContact(lower), "message" to ""))
 
             // Call
-            lower.contains("call") || lower.contains("phone") || lower.contains("ring") || lower.contains("dial") ->
+            lower.contains("call") || lower.contains("phone") || lower.contains("ring") || lower.contains("dial") || lower.contains("karo call") ->
                 IntentResult(IntentType.CALL, "make_call", mapOf("contact" to extractContact(lower)))
 
             // Weather
@@ -340,6 +308,46 @@ User input: $input
             lower.contains("news") || lower.contains("khabar") || lower.contains("headline") || lower.contains("breaking") ->
                 IntentResult(IntentType.NEWS, "get_news", mapOf("topic" to extractTopic(lower, listOf("news", "khabar", "headline", "breaking", "latest", "top"))))
 
+            // Note save
+            lower.contains("yaad") || lower.contains("note save") || lower.contains("remember") || lower.contains("save note") || lower.contains("yaad rakh") ->
+                IntentResult(IntentType.NOTE_SAVE, "save_note", mapOf("note" to input))
+
+            // Note read
+            lower.contains("note padho") || lower.contains("notes dikhao") || lower.contains("saved notes") || lower.contains("kya yaad hai") || lower.contains("kya note save hai") ->
+                IntentResult(IntentType.NOTE_READ, "read_notes")
+
+            // SMS Read
+            lower.contains("sms padho") || lower.contains("message padho") || lower.contains("read sms") || lower.contains("messages dikhao") || lower.contains("inbox") ->
+                IntentResult(IntentType.SMS_READ, "read_sms")
+
+            // Contact search
+            lower.contains("number batao") || lower.contains("contact search") || lower.contains("find contact") || lower.contains("ka number") ->
+                IntentResult(IntentType.CONTACT_SEARCH, "find_contact", mapOf("contact" to extractContact(lower)))
+
+            // Timer
+            lower.contains("timer") || lower.contains("stopwatch") || lower.contains("timer lagao") ->
+                IntentResult(IntentType.TIMER, "set_timer", mapOf("duration" to extractTopic(lower, listOf("timer", "lagao", "set", "start"))))
+
+            // Translation
+            lower.contains("translate") || lower.contains("anuvad") || lower.contains("bhasha") ->
+                IntentResult(IntentType.TRANSLATE, "translate", mapOf("text" to input))
+
+            // Calculation
+            lower.contains("calculate") || lower.contains("hisab") || lower.contains("kitna hota") || Regex("\\d+\\s*[+\\-*/]\\s*\\d+").containsMatchIn(lower) ->
+                IntentResult(IntentType.CALCULATE, "calculate", mapOf("expression" to input))
+
+            // Camera
+            lower.contains("camera") || lower.contains("photo") || lower.contains("selfie") || lower.contains("picture") || lower.contains("pic") ->
+                IntentResult(IntentType.CAMERA, "open_camera")
+
+            // Continuous mode
+            lower.contains("continuous mode") || lower.contains("always listening") || lower.contains("call type") ->
+                IntentResult(IntentType.CONTINUOUS_MODE, "toggle_continuous")
+
+            // File manager
+            lower.contains("file manager") || lower.contains("files open") || lower.contains("downloads") || lower.contains("folder kholo") ->
+                IntentResult(IntentType.FILE_OPEN, "open_files")
+
             // Music/Media
             lower.contains("play") && (lower.contains("music") || lower.contains("song") || lower.contains("gana")) ->
                 IntentResult(IntentType.MEDIA_CONTROL, "play", mapOf("action" to "play"))
@@ -349,12 +357,8 @@ User input: $input
                 IntentResult(IntentType.ALARM, "set_alarm")
 
             // Reminder
-            lower.contains("remind") || lower.contains("yaad") ->
+            lower.contains("remind") || lower.contains("reminder") ->
                 IntentResult(IntentType.REMINDER, "set_reminder")
-
-            // Battery
-            lower.contains("battery") || lower.contains("charge") ->
-                IntentResult(IntentType.BATTERY, "battery_status")
 
             // Flashlight
             lower.contains("flashlight") || lower.contains("torch") || lower.contains("flash") ->
@@ -364,13 +368,16 @@ User input: $input
             lower.contains("time") || lower.contains("samay") || lower.contains("baje") ->
                 IntentResult(IntentType.TIME_DATE, "get_time")
 
+            // SMS Send
+            lower.contains("sms") || lower.contains("text message") || lower.contains("message bhejo") ->
+                IntentResult(IntentType.SMS, "send_sms", mapOf("contact" to extractContact(lower)))
+
             else -> IntentResult(IntentType.GENERAL_CHAT, "general_conversation")
         }
     }
 
     private fun extractContact(input: String): String {
-        // Remove common keywords and try to extract the name
-        val cleaned = input.replace(Regex("(?i)\\b(?:call|phone|ring|dial|text|message|send|whatsapp|wa|from|sim\\s*\\d|on|to|that|the|please)\\b"), "").trim()
+        val cleaned = input.replace(Regex("(?i)\\b(?:call|phone|ring|dial|text|message|send|whatsapp|wa|from|sim\\s*\\d|on|to|that|the|please|karo|bhejo|ka|number|batao|se|ko)\\b"), "").trim()
         return cleaned.ifBlank { "unknown" }
     }
 

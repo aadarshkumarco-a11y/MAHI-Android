@@ -22,7 +22,7 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
-    <!-- Camera (Flashlight) -->
+    <!-- Camera (Flashlight + Camera) -->
     <uses-permission android:name="android.permission.CAMERA" />
 
     <!-- Phone & Contacts -->
@@ -31,9 +31,10 @@
     <uses-permission android:name="android.permission.READ_CALL_LOG" />
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
-    <!-- SMS -->
+    <!-- SMS (Send + Read) -->
     <uses-permission android:name="android.permission.SEND_SMS" />
     <uses-permission android:name="android.permission.READ_SMS" />
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
 
     <!-- Calendar -->
     <uses-permission android:name="android.permission.READ_CALENDAR" />
@@ -59,6 +60,9 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.WRITE_SETTINGS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Read external storage for file manager -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
 
     <uses-feature
         android:name="android.hardware.camera"
@@ -109,12 +113,34 @@
         <package android:name="com.reddit.frontpage" />
         <package android:name="com.pinterest" />
         <package android:name="com.discord" />
+        <!-- File manager packages -->
+        <package android:name="com.google.android.apps.nbu.files" />
+        <package android:name="com.android.filemanager" />
+        <package android:name="com.sec.android.app.myfiles" />
+        <package android:name="com.mi.android.globalFileexplorer" />
+        <!-- Clock app for timers -->
+        <package android:name="com.android.deskclock" />
+        <!-- Calculator -->
+        <package android:name="com.android.calculator2" />
+        <!-- Gallery -->
+        <package android:name="com.android.gallery3d" />
+        <!-- WhatsApp Business -->
+        <package android:name="com.whatsapp.w4b" />
         <intent>
             <action android:name="android.intent.action.WEB_SEARCH" />
         </intent>
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="https" />
+        </intent>
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SET_TIMER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SET_ALARM" />
         </intent>
     </queries>
 
@@ -203,8 +229,6 @@
             android:name=".receiver.ReminderReceiver"
             android:exported="false"
             android:enabled="true" />
-
-        <!-- Reminder Notification Channel -->
 
     </application>
 

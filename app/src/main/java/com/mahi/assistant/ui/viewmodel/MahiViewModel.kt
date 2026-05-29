@@ -50,6 +50,7 @@ import java.net.URLEncoder
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
 data class WeatherUiState(
@@ -97,7 +98,9 @@ data class SettingsUiState(
     val wakeWord: String = "Hey Mahi",
     val autoStartOnBoot: Boolean = true,
     val floatingAssistant: Boolean = false,
-    val isSaved: Boolean = false
+    val isSaved: Boolean = false,
+    val defaultCity: String = "New Delhi",
+    val continuousMode: Boolean = false
 )
 
 @HiltViewModel
@@ -152,6 +155,10 @@ class MahiViewModel @Inject constructor(
     private val _welcomeMessage = MutableStateFlow<String?>(null)
     val welcomeMessage: StateFlow<String?> = _welcomeMessage.asStateFlow()
 
+    // Continuous mode state
+    private val _continuousMode = MutableStateFlow(false)
+    val continuousMode: StateFlow<Boolean> = _continuousMode.asStateFlow()
+
     private var processingJob: Job? = null
 
     // ── App package map ──────────────────────────────────────────────────────
@@ -201,6 +208,7 @@ class MahiViewModel @Inject constructor(
         "pinterest" to "com.pinterest",
         "discord" to "com.discord",
         "files" to "com.google.android.apps.nbu.files",
+        "file manager" to "com.google.android.apps.nbu.files",
         "sharechat" to "in.mohalla.sharechat",
         "jio" to "com.jio.myjio",
         "jiotv" to "com.jio.jiotv",
@@ -215,9 +223,21 @@ class MahiViewModel @Inject constructor(
     )
 
     init {
+        // Load conversation history from Room and pass to AI engine as context
         viewModelScope.launch {
             try {
-                val entities = messageDao.getRecent(50)
+                val entities = messageDao.getRecent(20)
+                val chatMessages = entities.map { entity: MessageEntity ->
+                    com.mahi.assistant.ai.ChatMessage(
+                        role = if (entity.role == "USER") com.mahi.assistant.ai.ChatMessage.ROLE_USER else com.mahi.assistant.ai.ChatMessage.ROLE_MODEL,
+                        content = entity.content,
+                        timestamp = entity.timestamp
+                    )
+                }
+                // Load context into AI engine for memory
+                aiEngine.loadContext(chatMessages)
+
+                // Also load into UI messages
                 _messages.value = entities.map { entity: MessageEntity ->
                     ChatMessage(
                         id = entity.id.toString(),
@@ -228,6 +248,9 @@ class MahiViewModel @Inject constructor(
                 }
             } catch (_: Exception) { }
         }
+
+        // Load continuous mode state
+        _continuousMode.value = settingsManager.isContinuousMode()
 
         try { loadSettings() } catch (_: Exception) { }
 
@@ -259,7 +282,13 @@ class MahiViewModel @Inject constructor(
         try {
             ttsEngine.callback = object : TextToSpeechEngine.Callback {
                 override fun onSpeakStart(utteranceId: String) { _assistantState.value = AssistantState.SPEAKING }
-                override fun onSpeakEnd(utteranceId: String) { _assistantState.value = AssistantState.IDLE }
+                override fun onSpeakEnd(utteranceId: String) {
+                    _assistantState.value = AssistantState.IDLE
+                    // In continuous mode, start listening again after speaking
+                    if (_continuousMode.value) {
+                        startListening()
+                    }
+                }
                 override fun onError(utteranceId: String) { _assistantState.value = AssistantState.IDLE }
             }
         } catch (_: Exception) { }
@@ -284,7 +313,9 @@ class MahiViewModel @Inject constructor(
             voicePitch = settingsManager.getVoicePitch(),
             wakeWord = settingsManager.getWakeWord(),
             autoStartOnBoot = settingsManager.getAutoStartOnBoot(),
-            floatingAssistant = settingsManager.getFloatingAssistant()
+            floatingAssistant = settingsManager.getFloatingAssistant(),
+            defaultCity = settingsManager.getDefaultCity(),
+            continuousMode = settingsManager.isContinuousMode()
         )
     }
 
@@ -297,6 +328,8 @@ class MahiViewModel @Inject constructor(
     fun updateWakeWord(word: String) { settingsManager.setWakeWord(word); _settingsState.value = _settingsState.value.copy(wakeWord = word) }
     fun updateAutoStartOnBoot(enabled: Boolean) { settingsManager.setAutoStartOnBoot(enabled); _settingsState.value = _settingsState.value.copy(autoStartOnBoot = enabled) }
     fun updateFloatingAssistant(enabled: Boolean) { settingsManager.setFloatingAssistant(enabled); _settingsState.value = _settingsState.value.copy(floatingAssistant = enabled) }
+    fun updateDefaultCity(city: String) { settingsManager.setDefaultCity(city); _settingsState.value = _settingsState.value.copy(defaultCity = city) }
+    fun updateContinuousMode(enabled: Boolean) { settingsManager.setContinuousMode(enabled); _continuousMode.value = enabled; _settingsState.value = _settingsState.value.copy(continuousMode = enabled) }
     fun saveAllSettings() { _settingsState.value = _settingsState.value.copy(isSaved = true) }
 
     fun navigateTo(route: String) { _currentRoute.value = route }
@@ -332,6 +365,18 @@ class MahiViewModel @Inject constructor(
             _messages.value = _messages.value + assistantMessage
             try { messageDao.insert(MessageEntity(role = "ASSISTANT", content = response, timestamp = System.currentTimeMillis())) } catch (_: Exception) { }
 
+            // Update AI engine context with new messages
+            try {
+                val recentMessages = _messages.value.takeLast(20).map {
+                    com.mahi.assistant.ai.ChatMessage(
+                        role = if (it.role == MessageRole.USER) com.mahi.assistant.ai.ChatMessage.ROLE_USER else com.mahi.assistant.ai.ChatMessage.ROLE_MODEL,
+                        content = it.content,
+                        timestamp = it.timestamp
+                    )
+                }
+                aiEngine.loadContext(recentMessages)
+            } catch (_: Exception) { }
+
             // Speak the response
             val speechText = response.replace(Regex("\\[\\w+\\]\\s*"), "").replace(Regex("[\\*#_]"), "").take(500)
             ttsEngine.speak(speechText, "response_${System.currentTimeMillis()}")
@@ -346,6 +391,7 @@ class MahiViewModel @Inject constructor(
             IntentClassifier.IntentType.YOUTUBE -> launchYouTube(intent.params["query"] ?: "")
             IntentClassifier.IntentType.CALL -> launchCall(intent.params["contact"] ?: "", intent.params["sim"] ?: "")
             IntentClassifier.IntentType.SMS -> launchSms(intent.params["contact"] ?: "", intent.params["message"])
+            IntentClassifier.IntentType.SMS_READ -> readSms()
             IntentClassifier.IntentType.WHATSAPP -> handleWhatsApp(intent.params["contact"] ?: "", intent.params["message"])
             IntentClassifier.IntentType.ALARM -> launchAlarm(intent.params["time"])
             IntentClassifier.IntentType.REMINDER -> setReminder(intent.params["task"] ?: "", intent.params["time"] ?: "")
@@ -360,6 +406,15 @@ class MahiViewModel @Inject constructor(
             IntentClassifier.IntentType.CALL_LOG -> getCallLog(intent.params["contact"] ?: "")
             IntentClassifier.IntentType.TIME_DATE -> getTimeDate()
             IntentClassifier.IntentType.FIND_PHONE -> findPhone()
+            IntentClassifier.IntentType.NOTE_SAVE -> saveNote(intent.params["note"] ?: originalInput)
+            IntentClassifier.IntentType.NOTE_READ -> readNotes()
+            IntentClassifier.IntentType.CONTACT_SEARCH -> searchContact(intent.params["contact"] ?: "")
+            IntentClassifier.IntentType.TIMER -> setTimer(intent.params["duration"] ?: "")
+            IntentClassifier.IntentType.TRANSLATE -> handleTranslation(intent.params["text"] ?: originalInput, intent.params["target_lang"] ?: "")
+            IntentClassifier.IntentType.CALCULATE -> handleCalculation(intent.params["expression"] ?: originalInput)
+            IntentClassifier.IntentType.CONTINUOUS_MODE -> toggleContinuousMode(intent.action)
+            IntentClassifier.IntentType.CAMERA -> openCamera()
+            IntentClassifier.IntentType.FILE_OPEN -> openFileManager()
             else -> fetchAiResponse(originalInput)
         }
     }
@@ -406,35 +461,74 @@ class MahiViewModel @Inject constructor(
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    // WHATSAPP — Smart Messaging
+    // WHATSAPP — FIXED: Uses ACTION_SEND + setPackage for reliability
     // ══════════════════════════════════════════════════════════════════════
 
     private fun handleWhatsApp(contact: String, message: String?): String {
-        if (contact.isBlank()) return "Who would you like to message on WhatsApp?"
+        if (contact.isBlank() && message.isNullOrBlank()) {
+            // Just open WhatsApp
+            return try {
+                val launchIntent = appContext.packageManager.getLaunchIntentForPackage("com.whatsapp")
+                if (launchIntent != null) {
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    appContext.startActivity(launchIntent)
+                    "Opening WhatsApp."
+                } else {
+                    "WhatsApp is not installed on your device."
+                }
+            } catch (e: Exception) {
+                "Couldn't open WhatsApp. ${e.message}"
+            }
+        }
 
         return try {
-            val phoneNumber = lookupContactPhoneNumber(contact)
-            val whatsappNumber = phoneNumber ?: contact.replace(Regex("\\s"), "")
+            // Try to resolve contact to phone number
+            val phoneNumber = if (contact.isNotBlank()) lookupContactPhoneNumber(contact) else null
 
-            if (message != null && message.isNotBlank()) {
-                // Send message via WhatsApp
-                val intent = Intent(Intent.ACTION_VIEW).apply {
-                    data = Uri.parse("https://wa.me/$whatsappNumber?text=${URLEncoder.encode(message, "UTF-8")}")
+            if (phoneNumber != null) {
+                // We have a phone number — use wa.me link with proper country code
+                val cleanNumber = phoneNumber.replace(Regex("[^+\\d]"), "")
+                val formattedNumber = if (!cleanNumber.startsWith("+")) "+$cleanNumber" else cleanNumber
+
+                if (message != null && message.isNotBlank()) {
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        data = Uri.parse("https://wa.me/${formattedNumber.replace("+", "")}?text=${URLEncoder.encode(message, "UTF-8")}")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    appContext.startActivity(intent)
+                    "Sending WhatsApp message to $contact: $message"
+                } else {
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        data = Uri.parse("https://wa.me/${formattedNumber.replace("+", "")}")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    appContext.startActivity(intent)
+                    "Opening WhatsApp chat with $contact."
+                }
+            } else if (message != null && message.isNotBlank()) {
+                // No phone number found — use ACTION_SEND with WhatsApp package
+                // This lets the user pick the contact in WhatsApp itself
+                val intent = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, message)
+                    setPackage("com.whatsapp")
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 appContext.startActivity(intent)
-                "Sending WhatsApp message to $contact: $message"
+                "Opening WhatsApp with your message. Select $contact from your WhatsApp contacts."
             } else {
-                // Just open chat
-                val intent = Intent(Intent.ACTION_VIEW).apply {
-                    data = Uri.parse("https://wa.me/$whatsappNumber")
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                // Just open WhatsApp — couldn't find contact
+                val launchIntent = appContext.packageManager.getLaunchIntentForPackage("com.whatsapp")
+                if (launchIntent != null) {
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    appContext.startActivity(launchIntent)
+                    "Opening WhatsApp. I couldn't find $contact's number."
+                } else {
+                    "WhatsApp is not installed on your device."
                 }
-                appContext.startActivity(intent)
-                "Opening WhatsApp chat with $contact."
             }
         } catch (e: Exception) {
-            // Fallback: just open WhatsApp
+            // Ultimate fallback: just open WhatsApp
             try {
                 val launchIntent = appContext.packageManager.getLaunchIntentForPackage("com.whatsapp")
                 if (launchIntent != null) {
@@ -469,7 +563,6 @@ class MahiViewModel @Inject constructor(
                     // SIM selection
                     if (simSlot.isNotBlank()) {
                         val slotIndex = simSlot.toIntOrNull()?.minus(1) ?: 0
-                        // Try TelecomManager for SIM selection (Android 5.1+)
                         putExtra("com.android.phone.extra.slot", slotIndex)
                         putExtra("slotId", slotIndex)
                         putExtra("simId", slotIndex)
@@ -509,11 +602,11 @@ class MahiViewModel @Inject constructor(
 
     private suspend fun fetchWeather(city: String): String {
         _weatherState.value = _weatherState.value.copy(isLoading = true)
-        val cityName = city.ifBlank { "New Delhi" } // Default for Indian users
+        // Use settings default city if none provided
+        val cityName = city.ifBlank { settingsManager.getDefaultCity() }
 
         // Try Open-Meteo first (FREE, no API key)
         return try {
-            // Geocode city name to coordinates
             val geocoder = Geocoder(appContext, Locale.getDefault())
             val addresses = geocoder.getFromLocationName(cityName, 1)
             if (addresses.isNullOrEmpty()) {
@@ -567,7 +660,6 @@ class MahiViewModel @Inject constructor(
     }
 
     private suspend fun fallbackWeather(city: String): String {
-        // Fallback to OpenWeatherMap if Open-Meteo fails
         return try {
             val weatherApiKey = settingsManager.getWeatherApiKey()
             if (weatherApiKey.isBlank()) {
@@ -622,19 +714,28 @@ class MahiViewModel @Inject constructor(
     )
 
     // ══════════════════════════════════════════════════════════════════════
-    // NEWS — Enhanced with topic search
+    // NEWS — FIXED: RSS fallback (FREE, no API key!) + GNews API
     // ══════════════════════════════════════════════════════════════════════
 
     private suspend fun fetchNews(topic: String, count: String): String {
         _newsState.value = _newsState.value.copy(isLoading = true)
         val maxArticles = count.toIntOrNull()?.coerceIn(1, 10) ?: 5
 
+        // Strategy: Try GNews API first, fallback to RSS (FREE, no key needed)
+        val apiResult = fetchNewsFromApi(topic, maxArticles)
+        if (apiResult != null) return apiResult
+
+        // API failed — use RSS fallback
+        return fetchNewsRss(topic, maxArticles)
+    }
+
+    /**
+     * Try GNews API. Returns null if it fails (so we can fallback to RSS).
+     */
+    private suspend fun fetchNewsFromApi(topic: String, maxArticles: Int): String? {
         return try {
             val newsApiKey = settingsManager.getNewsApiKey()
-            if (newsApiKey.isBlank()) {
-                _newsState.value = _newsState.value.copy(isLoading = false)
-                return "News API key not set. Please add your GNews API key in Settings."
-            }
+            if (newsApiKey.isBlank()) return null // Fall through to RSS
 
             val news = if (topic.isNotBlank()) {
                 NewsClient.instance.searchNews(query = topic, lang = "en", max = maxArticles, token = newsApiKey)
@@ -645,17 +746,58 @@ class MahiViewModel @Inject constructor(
             _newsState.value = NewsUiState(articles = news.articles ?: emptyList(), isLoading = false, selectedCategory = topic)
             navigateTo("news")
 
-            if (news.articles.isNullOrEmpty()) "No news articles found for $topic."
+            if (news.articles.isNullOrEmpty()) null // Fall through to RSS
             else {
                 val topicLabel = if (topic.isNotBlank()) "about $topic" else ""
                 "Top $topicLabel headlines: ${news.articles.take(maxArticles).mapIndexed { i, a -> "${i + 1}. ${a.title ?: "Untitled"}" }.joinToString(". ")}"
             }
         } catch (e: retrofit2.HttpException) {
-            _newsState.value = _newsState.value.copy(isLoading = false, error = e.message)
-            when (e.code()) {
-                401 -> "News API key is invalid. Please update it in Settings."
-                else -> "Couldn't fetch news. Error: ${e.code()}"
+            // API key expired or invalid — fall through to RSS
+            null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * FREE RSS News Fallback using Google News RSS.
+     * No API key needed! Unlimited requests!
+     */
+    private suspend fun fetchNewsRss(topic: String, maxArticles: Int): String {
+        return try {
+            val query = if (topic.isNotBlank()) URLEncoder.encode(topic, "UTF-8") else ""
+            val rssUrl = if (topic.isNotBlank())
+                "https://news.google.com/rss/search?q=$query&hl=en-IN&gl=IN&ceid=IN:en"
+            else
+                "https://news.google.com/rss?hl=en-IN&gl=IN&ceid=IN:en"
+
+            val client = okhttp3.OkHttpClient.Builder()
+                .connectTimeout(15, TimeUnit.SECONDS)
+                .readTimeout(15, TimeUnit.SECONDS)
+                .build()
+            val request = okhttp3.Request.Builder().url(rssUrl).build()
+            val response = client.newCall(request).execute()
+            val xml = response.body?.string() ?: return "Couldn't fetch news. Please check your internet connection."
+
+            // Parse RSS XML — extract titles from <item><title> tags
+            val titles = Regex("<item>.*?</item>", RegexOption.DOT_MATCHES_ALL)
+                .findAll(xml)
+                .take(maxArticles)
+                .mapNotNull { itemMatch ->
+                    Regex("<title>(.*?)</title>").find(itemMatch.value)?.groupValues?.get(1)
+                }
+                .toList()
+
+            if (titles.isEmpty()) {
+                _newsState.value = _newsState.value.copy(isLoading = false)
+                return "No news found for ${topic.ifBlank { "top headlines" }}."
             }
+
+            _newsState.value = _newsState.value.copy(isLoading = false, selectedCategory = topic)
+            navigateTo("news")
+
+            val topicLabel = if (topic.isNotBlank()) "about $topic" else ""
+            "Top $topicLabel headlines: ${titles.mapIndexed { i, t -> "${i + 1}. $t" }.joinToString(". ")}"
         } catch (e: Exception) {
             _newsState.value = _newsState.value.copy(isLoading = false, error = e.message)
             "Couldn't fetch news. Please check your internet connection."
@@ -797,13 +939,346 @@ class MahiViewModel @Inject constructor(
             val maxVolume = am.getStreamMaxVolume(AudioManager.STREAM_RING)
             am.setStreamVolume(AudioManager.STREAM_RING, maxVolume, 0)
 
-            // Play ringtone
             val ringtoneUri = Settings.System.DEFAULT_RINGTONE_URI
             val ringtone = android.media.RingtoneManager.getRingtone(appContext, ringtoneUri)
             ringtone.play()
             "Ringing your phone at maximum volume! Find it!"
         } catch (e: Exception) {
             "I couldn't ring your phone. ${e.message}"
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // SMS READ — NEW: Read SMS inbox
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun readSms(): String {
+        return try {
+            val uri = android.net.Uri.parse("content://sms/inbox")
+            val projection = arrayOf("_id", "address", "body", "date")
+            val messages = mutableListOf<String>()
+
+            appContext.contentResolver.query(uri, projection, null, null, "date DESC")?.use { cursor ->
+                var count = 0
+                while (cursor.moveToNext() && count < 5) {
+                    val sender = cursor.getString(1) ?: "Unknown"
+                    val body = cursor.getString(2) ?: ""
+                    // Try to resolve sender name from contacts
+                    val senderName = resolveContactName(sender) ?: sender
+                    messages.add("From $senderName: $body")
+                    count++
+                }
+            }
+
+            if (messages.isEmpty()) "No messages found in your inbox."
+            else "Recent messages: ${messages.joinToString(". ")}"
+        } catch (e: SecurityException) {
+            "I need SMS permission to read your messages. Please grant it in Settings."
+        } catch (e: Exception) {
+            "Couldn't read messages. ${e.message}"
+        }
+    }
+
+    /**
+     * Resolve a phone number to a contact name.
+     */
+    private fun resolveContactName(phoneNumber: String): String? {
+        return try {
+            val uri = ContactsContract.PhoneLookup.CONTENT_URI
+            val projection = arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME)
+            val selection = "${ContactsContract.PhoneLookup.NUMBER} = ?"
+            val selectionArgs = arrayOf(phoneNumber)
+
+            appContext.contentResolver.query(uri, projection, selection, selectionArgs, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.PhoneLookup.DISPLAY_NAME))
+                } else null
+            }
+        } catch (_: Exception) { null }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // NOTES — NEW: Save/Read notes using SharedPreferences
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun saveNote(note: String): String {
+        if (note.isBlank()) return "What would you like me to remember?"
+        val notes = settingsManager.getNotes().toMutableList()
+        notes.add(note)
+        settingsManager.saveNotes(notes)
+        return "Note saved: $note. I'll remember this for you."
+    }
+
+    private fun readNotes(): String {
+        val notes = settingsManager.getNotes()
+        return if (notes.isEmpty()) "You haven't saved any notes yet. Tell me to remember something!"
+        else "Your notes: ${notes.mapIndexed { i, n -> "${i + 1}. $n" }.joinToString(". ")}"
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // CONTACT SEARCH — NEW: Find contact by name
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun searchContact(name: String): String {
+        if (name.isBlank()) return "Which contact are you looking for?"
+
+        return try {
+            val uri = ContactsContract.CommonDataKinds.Phone.CONTENT_URI
+            val projection = arrayOf(
+                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                ContactsContract.CommonDataKinds.Phone.NUMBER
+            )
+            val selection = "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?"
+            val selectionArgs = arrayOf("%$name%")
+
+            val results = mutableListOf<String>()
+            appContext.contentResolver.query(uri, projection, selection, selectionArgs, null)?.use { cursor ->
+                while (cursor.moveToNext() && results.size < 3) {
+                    val contactName = cursor.getString(0) ?: ""
+                    val phone = cursor.getString(1) ?: ""
+                    results.add("$contactName: $phone")
+                }
+            }
+
+            // Also try email lookup
+            try {
+                val emailUri = ContactsContract.CommonDataKinds.Email.CONTENT_URI
+                val emailProjection = arrayOf(
+                    ContactsContract.CommonDataKinds.Email.DISPLAY_NAME,
+                    ContactsContract.CommonDataKinds.Email.DATA
+                )
+                val emailSelection = "${ContactsContract.CommonDataKinds.Email.DISPLAY_NAME} LIKE ?"
+
+                appContext.contentResolver.query(emailUri, emailProjection, emailSelection, selectionArgs, null)?.use { cursor ->
+                    while (cursor.moveToNext() && results.size < 5) {
+                        val contactName = cursor.getString(0) ?: ""
+                        val email = cursor.getString(1) ?: ""
+                        val entry = "$contactName: $email (email)"
+                        if (results.none { it.startsWith(contactName) && it.contains(email) }) {
+                            results.add(entry)
+                        }
+                    }
+                }
+            } catch (_: Exception) { }
+
+            if (results.isEmpty()) "No contact found for $name."
+            else results.joinToString(". ")
+        } catch (e: SecurityException) {
+            "I need contacts permission to search. Please grant it in Settings."
+        } catch (e: Exception) {
+            "Couldn't search contacts. ${e.message}"
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // TIMER — NEW: Set timer using clock app
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun setTimer(duration: String): String {
+        return try {
+            val durationSeconds = parseDurationToSeconds(duration)
+
+            val intent = Intent(AlarmClock.ACTION_SET_TIMER).apply {
+                if (durationSeconds > 0) {
+                    putExtra(AlarmClock.EXTRA_LENGTH, durationSeconds)
+                }
+                putExtra(AlarmClock.EXTRA_MESSAGE, "MAHI Timer")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+
+            // Check if there's an app that can handle this
+            if (intent.resolveActivity(appContext.packageManager) != null) {
+                appContext.startActivity(intent)
+                val durationText = if (durationSeconds > 0) formatDurationText(durationSeconds) else duration
+                "Timer set for $durationText."
+            } else {
+                // Fallback: just open the clock app
+                val clockIntent = appContext.packageManager.getLaunchIntentForPackage("com.android.deskclock")
+                if (clockIntent != null) {
+                    clockIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    appContext.startActivity(clockIntent)
+                    "Opening clock app. Please set the timer manually."
+                } else {
+                    "Couldn't find a clock app to set the timer."
+                }
+            }
+        } catch (e: Exception) {
+            "Couldn't set timer. ${e.message}"
+        }
+    }
+
+    private fun parseDurationToSeconds(duration: String): Int {
+        val lower = duration.lowercase().trim()
+
+        // "X minutes" or "X min" or "X minute"
+        val minutes = Regex("(\\d+)\\s*(?:min|minute|minutes)").find(lower)
+        if (minutes != null) return (minutes.groupValues[1].toIntOrNull() ?: 0) * 60
+
+        // "X hours" or "X hr"
+        val hours = Regex("(\\d+)\\s*(?:hour|hours|hr)").find(lower)
+        if (hours != null) return (hours.groupValues[1].toIntOrNull() ?: 0) * 3600
+
+        // "X seconds" or "X sec"
+        val seconds = Regex("(\\d+)\\s*(?:sec|second|seconds)").find(lower)
+        if (seconds != null) return seconds.groupValues[1].toIntOrNull() ?: 0
+
+        // Just a number — assume minutes
+        val justNumber = Regex("^(\\d+)$").find(lower)
+        if (justNumber != null) return (justNumber.groupValues[1].toIntOrNull() ?: 0) * 60
+
+        return 0
+    }
+
+    private fun formatDurationText(seconds: Int): String {
+        return when {
+            seconds >= 3600 -> "${seconds / 3600} hour${if (seconds / 3600 > 1) "s" else ""}"
+            seconds >= 60 -> "${seconds / 60} minute${if (seconds / 60 > 1) "s" else ""}"
+            else -> "$seconds second${if (seconds > 1) "s" else ""}"
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // TRANSLATION — NEW: Use Gemini for translation
+    // ══════════════════════════════════════════════════════════════════════
+
+    private suspend fun handleTranslation(text: String, targetLang: String): String {
+        if (text.isBlank()) return "What would you like me to translate?"
+        return try {
+            val langSpec = if (targetLang.isNotBlank()) " to $targetLang" else ""
+            aiEngine.queryOnce("Translate the following$langSpec. Give ONLY the translation, nothing else: $text")
+        } catch (e: Exception) {
+            "Couldn't translate. ${e.message}"
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // CALCULATION — NEW: Use Gemini for math
+    // ══════════════════════════════════════════════════════════════════════
+
+    private suspend fun handleCalculation(expression: String): String {
+        if (expression.isBlank()) return "What would you like me to calculate?"
+        return try {
+            // Try basic arithmetic first (instant, no API)
+            val basicResult = tryBasicMath(expression)
+            if (basicResult != null) return "The answer is $basicResult."
+
+            // Fallback to Gemini for complex calculations
+            aiEngine.queryOnce("Calculate this and give ONLY the answer: $expression")
+        } catch (e: Exception) {
+            "Couldn't calculate. ${e.message}"
+        }
+    }
+
+    private fun tryBasicMath(expression: String): Double? {
+        return try {
+            // Simple regex-based calculator for basic operations
+            val cleaned = expression.lowercase()
+                .replace(Regex("[^0-9+\\-*/.() ]"), "")
+                .trim()
+            if (cleaned.isBlank()) return null
+
+            // Evaluate simple expressions
+            val addMatch = Regex("(\\d+(?:\\.\\d+)?)\\s*\\+\\s*(\\d+(?:\\.\\d+)?)").find(cleaned)
+            val subMatch = Regex("(\\d+(?:\\.\\d+)?)\\s*-\\s*(\\d+(?:\\.\\d+)?)").find(cleaned)
+            val mulMatch = Regex("(\\d+(?:\\.\\d+)?)\\s*\\*\\s*(\\d+(?:\\.\\d+)?)").find(cleaned)
+            val divMatch = Regex("(\\d+(?:\\.\\d+)?)\\s*/\\s*(\\d+(?:\\.\\d+)?)").find(cleaned)
+
+            when {
+                addMatch != null -> addMatch.groupValues[1].toDouble() + addMatch.groupValues[2].toDouble()
+                subMatch != null -> subMatch.groupValues[1].toDouble() - subMatch.groupValues[2].toDouble()
+                mulMatch != null -> mulMatch.groupValues[1].toDouble() * mulMatch.groupValues[2].toDouble()
+                divMatch != null -> {
+                    val divisor = divMatch.groupValues[2].toDouble()
+                    if (divisor == 0.0) return null
+                    divMatch.groupValues[1].toDouble() / divisor
+                }
+                else -> null
+            }
+        } catch (_: Exception) { null }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // CONTINUOUS MODE — NEW: Toggle always-listening mode
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun toggleContinuousMode(action: String): String {
+        val enable = action.contains("enable") || action == "toggle_continuous" && !_continuousMode.value
+        _continuousMode.value = enable
+        settingsManager.setContinuousMode(enable)
+        _settingsState.value = _settingsState.value.copy(continuousMode = enable)
+
+        return if (enable) {
+            "Continuous mode enabled. I'll keep listening after each response. Say 'stop continuous mode' to disable."
+        } else {
+            "Continuous mode disabled. I'll wait for you to tap the mic button."
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // CAMERA — NEW: Open camera app or take photo
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun openCamera(): String {
+        return try {
+            val intent = Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            if (intent.resolveActivity(appContext.packageManager) != null) {
+                appContext.startActivity(intent)
+                "Opening camera."
+            } else {
+                // Fallback: launch camera app by package name
+                val cameraIntent = appContext.packageManager.getLaunchIntentForPackage("com.android.camera")
+                if (cameraIntent != null) {
+                    cameraIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    appContext.startActivity(cameraIntent)
+                    "Opening camera."
+                } else {
+                    "Couldn't find a camera app on your device."
+                }
+            }
+        } catch (e: Exception) {
+            "Couldn't open camera. ${e.message}"
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // FILE MANAGER — NEW: Open files/downloads
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun openFileManager(): String {
+        return try {
+            // Try opening the default file manager
+            val filesIntent = appContext.packageManager.getLaunchIntentForPackage("com.google.android.apps.nbu.files")
+            if (filesIntent != null) {
+                filesIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                appContext.startActivity(filesIntent)
+                return "Opening file manager."
+            }
+
+            // Try generic files intent
+            try {
+                val intent = Intent(Intent.ACTION_VIEW).apply {
+                    data = android.provider.MediaStore.Files.getContentUri("external")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                appContext.startActivity(intent)
+                "Opening files."
+            } catch (e: Exception) {
+                // Try opening downloads folder
+                try {
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        data = Uri.parse("content://downloads/my_downloads")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    appContext.startActivity(intent)
+                    "Opening downloads."
+                } catch (e2: Exception) {
+                    "Couldn't open file manager. ${e2.message}"
+                }
+            }
+        } catch (e: Exception) {
+            "Couldn't open file manager. ${e.message}"
         }
     }
 
@@ -816,7 +1291,6 @@ class MahiViewModel @Inject constructor(
             val lm = appContext.getSystemService(Context.LOCATION_SERVICE) as LocationManager
             val providers = lm.allProviders
 
-            // Try to get last known location
             var locationText = "I couldn't determine your location. Please enable location services."
 
             for (provider in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
@@ -854,7 +1328,6 @@ class MahiViewModel @Inject constructor(
         if (task.isBlank()) return "What should I remind you about?"
 
         return try {
-            // Create a notification-based reminder using AlarmManager
             val intent = Intent(appContext, ReminderReceiver::class.java).apply {
                 putExtra("task", task)
             }
@@ -866,7 +1339,6 @@ class MahiViewModel @Inject constructor(
             val alarmManager = appContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager
 
             if (time.isNotBlank()) {
-                // Try to parse time - basic parsing
                 val delayMs = parseTimeToMillis(time)
                 if (delayMs > 0) {
                     alarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP,
@@ -874,12 +1346,10 @@ class MahiViewModel @Inject constructor(
                     val timeDesc = formatDelay(delayMs)
                     "Reminder set: $task in $timeDesc."
                 } else {
-                    // Can't parse time - set alarm clock instead
                     launchAlarm(time)
                     return "I set an alarm for $time. For reminders, say the time like 'in 5 minutes' or 'at 3pm'."
                 }
             } else {
-                // No time - remind in 1 minute as default
                 alarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP,
                     SystemClock.elapsedRealtime() + 60000, pendingIntent)
                 "Reminder set: $task in 1 minute."
@@ -892,7 +1362,6 @@ class MahiViewModel @Inject constructor(
     private fun parseTimeToMillis(time: String): Long {
         val lower = time.lowercase().trim()
 
-        // "in X minutes/hours"
         val inMinutes = Regex("(?i)(\\d+)\\s*min").find(lower)
         if (inMinutes != null) return inMinutes.groupValues[1].toLongOrNull()?.times(60000L) ?: 0L
 
@@ -902,7 +1371,6 @@ class MahiViewModel @Inject constructor(
         val inSeconds = Regex("(?i)(\\d+)\\s*sec").find(lower)
         if (inSeconds != null) return inSeconds.groupValues[1].toLongOrNull()?.times(1000L) ?: 0L
 
-        // "at HH:mm" or "at HH am/pm"
         val atTime = Regex("(?i)(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm)?").find(lower)
         if (atTime != null) {
             var hour = atTime.groupValues[1].toIntOrNull() ?: return 0L
@@ -917,7 +1385,6 @@ class MahiViewModel @Inject constructor(
             calendar.set(java.util.Calendar.MINUTE, minute)
             calendar.set(java.util.Calendar.SECOND, 0)
 
-            // If the time has already passed today, schedule for tomorrow
             if (calendar.timeInMillis <= System.currentTimeMillis()) {
                 calendar.add(java.util.Calendar.DAY_OF_MONTH, 1)
             }
@@ -1017,8 +1484,12 @@ class MahiViewModel @Inject constructor(
     private fun launchSms(contact: String, message: String?): String {
         if (contact.isBlank()) return "Who would you like to message?"
         return try {
+            // Try to resolve contact to phone number
+            val phoneNumber = lookupContactPhoneNumber(contact)
+            val number = phoneNumber ?: contact
+
             val smsIntent = Intent(Intent.ACTION_SENDTO).apply {
-                data = Uri.parse("smsto:${Uri.encode(contact)}")
+                data = Uri.parse("smsto:${Uri.encode(number)}")
                 if (message != null) putExtra("sms_body", message)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
@@ -1129,16 +1600,21 @@ class MahiViewModel @Inject constructor(
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    // AI FALLBACK — General Chat
+    // AI FALLBACK — General Chat with MEMORY
     // ══════════════════════════════════════════════════════════════════════
 
     private suspend fun fetchAiResponse(input: String): String {
         navigateTo("chat")
         return try {
-            val history = _messages.value.takeLast(10).map {
-                com.mahi.assistant.ai.ChatMessage(role = it.role.name.lowercase(), content = it.content)
+            // Pass last 20 messages as context for memory
+            val history = _messages.value.takeLast(20).map {
+                com.mahi.assistant.ai.ChatMessage(
+                    role = if (it.role == MessageRole.USER) com.mahi.assistant.ai.ChatMessage.ROLE_USER else com.mahi.assistant.ai.ChatMessage.ROLE_MODEL,
+                    content = it.content,
+                    timestamp = it.timestamp
+                )
             }
-            aiEngine.sendMessage(input, history)
+            aiEngine.chatWithMemory(input, history)
         } catch (e: Exception) {
             "I'm having trouble connecting right now. Please check your internet connection."
         }
