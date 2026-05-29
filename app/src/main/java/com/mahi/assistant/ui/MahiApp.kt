@@ -38,7 +38,6 @@ private val bottomNavItems = listOf(
 
 /**
  * Main composable for the MAHI app.
- * Wrapped in error boundary to prevent Compose crashes from killing the app.
  */
 @Composable
 fun MahiApp(
@@ -46,65 +45,31 @@ fun MahiApp(
     hasAllPermissions: Boolean = false,
     onRequestPermissions: () -> Unit = {},
 ) {
-    var hasError by remember { mutableStateOf(false) }
-
-    MAHITheme {
-        if (hasError) {
-            // Fallback UI if main content crashes
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = "MAHI encountered an error",
-                        color = TextPrimary,
-                        style = MaterialTheme.typography.headlineSmall
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Please restart the app",
-                        color = TextSecondary,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
-            }
-        } else {
-            try {
-                MahiAppContent(modifier)
-            } catch (e: Exception) {
-                hasError = true
-                android.util.Log.e("MahiApp", "Compose render error", e)
-            }
-        }
-    }
-}
-
-@Composable
-private fun MahiAppContent(modifier: Modifier = Modifier) {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
 
     val showBottomBar = currentDestination?.route in bottomNavItems.map { it.route }
 
-    Scaffold(
-        modifier = modifier,
-        containerColor = DeepSpaceBlack,
-        bottomBar = {
-            if (showBottomBar) {
-                MahiBottomBar(
-                    navController = navController,
-                    currentDestination = currentDestination,
-                )
-            }
-        },
-        contentWindowInsets = WindowInsets(0),
-    ) { innerPadding ->
-        MahiNavHost(
-            navController = navController,
-            modifier = Modifier.padding(innerPadding),
-        )
+    MAHITheme {
+        Scaffold(
+            modifier = modifier,
+            containerColor = DeepSpaceBlack,
+            bottomBar = {
+                if (showBottomBar) {
+                    MahiBottomBar(
+                        navController = navController,
+                        currentDestination = currentDestination,
+                    )
+                }
+            },
+            contentWindowInsets = WindowInsets(0),
+        ) { innerPadding ->
+            MahiNavHost(
+                navController = navController,
+                modifier = Modifier.padding(innerPadding),
+            )
+        }
     }
 }
 
