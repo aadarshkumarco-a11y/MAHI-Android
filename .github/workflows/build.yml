@@ -5,6 +5,9 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -58,19 +61,13 @@ jobs:
         tag_name: v2.1.0-build${{ github.run_number }}
         name: MAHI v2.1.0 Build #${{ github.run_number }}
         body: |
-          🤖 MAHI AI Assistant - Latest Build
+          MAHI AI Assistant - Latest Build
           
-          **Build:** #${{ github.run_number }}
-          **Date:** ${{ github.event.head_commit.timestamp }}
-          **Commit:** ${{ github.sha }}
+          Build: #${{ github.run_number }}
+          Date: ${{ github.event.head_commit.timestamp }}
+          Commit: ${{ github.sha }}
           
-          ### Download
-          - Download the APK from the artifacts below, or from the assets attached to this release.
-          
-          ### Install
-          1. Download the `.apk` file
-          2. Enable "Install from unknown sources" in your phone settings
-          3. Open the downloaded APK and tap Install
+          Download the APK from the assets below.
         files: |
           app/build/outputs/apk/release/*.apk
           app/build/outputs/apk/debug/*.apk
