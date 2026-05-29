@@ -12,8 +12,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.mahi.assistant.ui.components.DeviceToggleCard
-import com.mahi.assistant.ui.components.GlowCard
 import com.mahi.assistant.ui.theme.*
+import com.mahi.assistant.ui.viewmodel.MahiViewModel
 
 /**
  * Data model for a device toggle.
@@ -35,35 +35,31 @@ enum class DeviceSection(val label: String) {
 
 /**
  * Device control panel — JARVIS-style device management.
+ * Now connected to ViewModel for real device state.
  */
 @Composable
 fun ControlScreen(
+    viewModel: MahiViewModel,
     onBack: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    // Toggle states
-    var toggles by remember {
-        mutableStateOf(
-            listOf(
-                // Connectivity
-                DeviceToggle("flashlight", "Flashlight", Icons.Filled.FlashlightOn, false, DeviceSection.CONNECTIVITY),
-                DeviceToggle("wifi", "WiFi", Icons.Filled.Wifi, true, DeviceSection.CONNECTIVITY),
-                DeviceToggle("bluetooth", "Bluetooth", Icons.Filled.Bluetooth, false, DeviceSection.CONNECTIVITY),
-                DeviceToggle("hotspot", "Hotspot", Icons.Filled.WifiTethering, false, DeviceSection.CONNECTIVITY),
-                DeviceToggle("mobile_data", "Mobile Data", Icons.Filled.CellTower, true, DeviceSection.CONNECTIVITY),
-                // Display
-                DeviceToggle("brightness", "Brightness", Icons.Filled.BrightnessHigh, true, DeviceSection.DISPLAY),
-                DeviceToggle("auto_rotate", "Auto-Rotate", Icons.Filled.ScreenRotation, false, DeviceSection.DISPLAY),
-                DeviceToggle("screen_timeout", "Screen Timeout", Icons.Filled.ScreenLockPortrait, true, DeviceSection.DISPLAY),
-                // Sound
-                DeviceToggle("volume", "Volume", Icons.Filled.VolumeUp, true, DeviceSection.SOUND),
-                DeviceToggle("ringer", "Ringer", Icons.Filled.Notifications, true, DeviceSection.SOUND),
-                DeviceToggle("dnd", "DND", Icons.Filled.DoNotDisturbOn, false, DeviceSection.SOUND),
-                // System
-                DeviceToggle("battery_saver", "Battery Saver", Icons.Filled.BatterySaver, false, DeviceSection.SYSTEM),
-            )
-        )
-    }
+    val deviceState by viewModel.deviceState.collectAsState()
+
+    // Build toggles from actual device state
+    val toggles = listOf(
+        // Connectivity
+        DeviceToggle("flashlight", "Flashlight", Icons.Filled.FlashlightOn, deviceState.flashlight, DeviceSection.CONNECTIVITY),
+        DeviceToggle("wifi", "WiFi", Icons.Filled.Wifi, deviceState.wifi, DeviceSection.CONNECTIVITY),
+        DeviceToggle("bluetooth", "Bluetooth", Icons.Filled.Bluetooth, deviceState.bluetooth, DeviceSection.CONNECTIVITY),
+        DeviceToggle("hotspot", "Hotspot", Icons.Filled.WifiTethering, deviceState.hotspot, DeviceSection.CONNECTIVITY),
+        DeviceToggle("mobile_data", "Mobile Data", Icons.Filled.CellTower, deviceState.mobileData, DeviceSection.CONNECTIVITY),
+        // Display
+        DeviceToggle("auto_rotate", "Auto-Rotate", Icons.Filled.ScreenRotation, deviceState.autoRotate, DeviceSection.DISPLAY),
+        // Sound
+        DeviceToggle("dnd", "DND", Icons.Filled.DoNotDisturbOn, deviceState.dnd, DeviceSection.SOUND),
+        // System
+        DeviceToggle("battery_saver", "Battery Saver", Icons.Filled.BatterySaver, deviceState.batterySaver, DeviceSection.SYSTEM),
+    )
 
     Column(
         modifier = modifier
@@ -119,9 +115,7 @@ fun ControlScreen(
                             icon = toggle.icon,
                             isOn = toggle.isOn,
                             onToggle = {
-                                toggles = toggles.map {
-                                    if (it.id == toggle.id) it.copy(isOn = !it.isOn) else it
-                                }
+                                viewModel.toggleDevice(toggle.id)
                             },
                         )
                     }

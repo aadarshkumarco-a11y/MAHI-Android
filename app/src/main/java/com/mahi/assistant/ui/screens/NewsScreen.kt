@@ -5,8 +5,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -16,43 +14,25 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.mahi.assistant.api.Article
 import com.mahi.assistant.ui.components.GlowCard
 import com.mahi.assistant.ui.theme.*
-
-/**
- * Data model for a news article.
- */
-data class NewsArticle(
-    val id: String = java.util.UUID.randomUUID().toString(),
-    val source: String,
-    val title: String,
-    val description: String,
-    val publishedAt: String,
-    val url: String,
-    val category: String = "General",
-)
+import com.mahi.assistant.ui.viewmodel.MahiViewModel
 
 /**
  * News feed screen — JARVIS intel briefing.
+ * Now connected to ViewModel for live news data from GNews API.
  */
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun NewsScreen(
-    articles: List<NewsArticle> = sampleNewsArticles,
+    viewModel: MahiViewModel,
     onArticleClick: (String) -> Unit = {},
     onBack: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    val categories = listOf("General", "Technology", "Science", "Business")
-    val pagerState = rememberPagerState(pageCount = { categories.size })
-
-    // Filter articles by selected category
-    val selectedCategory = categories[pagerState.currentPage]
-    val filteredArticles = if (selectedCategory == "General") {
-        articles
-    } else {
-        articles.filter { it.category == selectedCategory }
-    }
+    val newsState by viewModel.newsState.collectAsState()
+    var selectedCategory by remember { mutableStateOf(newsState.selectedCategory) }
+    val categories = listOf("general", "technology", "science", "business", "entertainment", "sports", "health")
 
     Column(
         modifier = modifier
@@ -87,34 +67,24 @@ fun NewsScreen(
 
         // ── Category Tabs ───────────────────────────────────────
         ScrollableTabRow(
-            selectedTabIndex = pagerState.currentPage,
+            selectedTabIndex = categories.indexOf(selectedCategory).coerceAtLeast(0),
             containerColor = DeepSpaceBlack,
             contentColor = NeonCyan,
             edgePadding = 16.dp,
             divider = {},
-            indicator = { tabPositions ->
-                val currentTabPosition = tabPositions.getOrNull(pagerState.currentPage)
-                if (currentTabPosition != null) {
-                    Box(
-                        Modifier
-                            .customTabIndicatorOffset(currentTabPosition)
-                            .height(2.dp)
-                            .background(NeonCyan)
-                    )
-                }
-            },
         ) {
             categories.forEachIndexed { index, category ->
                 Tab(
-                    selected = pagerState.currentPage == index,
+                    selected = selectedCategory == category,
                     onClick = {
-                        // We'd normally use pagerState.animateScrollToPage(index)
+                        selectedCategory = category
+                        viewModel.processInput("show me $category news")
                     },
                     text = {
                         Text(
-                            text = category.uppercase(),
+                            text = category.replaceFirstChar { it.uppercase() },
                             style = MaterialTheme.typography.labelMedium,
-                            color = if (pagerState.currentPage == index) NeonCyan else TextTertiary,
+                            color = if (selectedCategory == category) NeonCyan else TextTertiary,
                         )
                     },
                 )
@@ -123,17 +93,93 @@ fun NewsScreen(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // ── Articles List ───────────────────────────────────────
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            items(filteredArticles, key = { it.id }) { article ->
-                NewsArticleCard(
-                    article = article,
-                    onClick = { onArticleClick(article.url) },
-                )
+        if (newsState.isLoading) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = NeonCyan)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Fetching headlines...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary,
+                    )
+                }
+            }
+        } else if (newsState.error != null) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        imageVector = Icons.Filled.Newspaper,
+                        contentDescription = null,
+                        tint = Amber,
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Could not load news",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = TextPrimary,
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = newsState.error ?: "Unknown error",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary,
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Set your GNews API key in Settings",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Amber,
+                    )
+                }
+            }
+        } else if (newsState.articles.isNotEmpty()) {
+            // ── Articles List ───────────────────────────────────────
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                items(newsState.articles, key = { it.url ?: it.title ?: Math.random().toString() }) { article ->
+                    NewsArticleCard(
+                        article = article,
+                        onClick = { article.url?.let { onArticleClick(it) } },
+                    )
+                }
+            }
+        } else {
+            // No articles yet
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        imageVector = Icons.Filled.Article,
+                        contentDescription = null,
+                        tint = NeonCyan,
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Ask MAHI for news",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = TextPrimary,
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Say \"Show me the news\" to get started",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary,
+                    )
+                }
             }
         }
     }
@@ -141,7 +187,7 @@ fun NewsScreen(
 
 @Composable
 private fun NewsArticleCard(
-    article: NewsArticle,
+    article: Article,
     onClick: () -> Unit,
 ) {
     GlowCard(
@@ -154,44 +200,40 @@ private fun NewsArticleCard(
         Column(
             modifier = Modifier.padding(16.dp),
         ) {
-            // Source + Time row
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
+            // Source
+            article.source?.name?.let { source ->
                 Text(
-                    text = article.source.uppercase(),
+                    text = source.uppercase(),
                     style = MaterialTheme.typography.labelSmall,
                     color = ElectricPurple,
-                )
-                Text(
-                    text = article.publishedAt,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = TextTertiary,
                 )
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
             // Title
-            Text(
-                text = article.title,
-                style = MaterialTheme.typography.titleSmall,
-                color = TextPrimary,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            article.title?.let { title ->
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = TextPrimary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
 
             Spacer(modifier = Modifier.height(6.dp))
 
             // Description
-            Text(
-                text = article.description,
-                style = MaterialTheme.typography.bodySmall,
-                color = TextSecondary,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-            )
+            article.description?.let { desc ->
+                Text(
+                    text = desc,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
 
             Spacer(modifier = Modifier.height(8.dp))
 
@@ -215,72 +257,3 @@ private fun NewsArticleCard(
         }
     }
 }
-
-// Sample data for preview
-private val sampleNewsArticles = listOf(
-    NewsArticle(
-        source = "TechCrunch",
-        title = "AI Agents Are Getting Smarter: The Next Frontier in Autonomous Systems",
-        description = "New breakthroughs in multi-agent AI systems are pushing the boundaries of what autonomous assistants can achieve in real-world scenarios.",
-        publishedAt = "2h ago",
-        url = "https://example.com/1",
-        category = "Technology",
-    ),
-    NewsArticle(
-        source = "Nature",
-        title = "Quantum Computing Achieves New Milestone in Error Correction",
-        description = "Researchers demonstrate a quantum error correction protocol that could pave the way for practical quantum computers.",
-        publishedAt = "4h ago",
-        url = "https://example.com/2",
-        category = "Science",
-    ),
-    NewsArticle(
-        source = "Reuters",
-        title = "Global Markets Rally on Positive Economic Data",
-        description = "Stock markets worldwide surged after better-than-expected employment figures and manufacturing output data.",
-        publishedAt = "5h ago",
-        url = "https://example.com/3",
-        category = "Business",
-    ),
-    NewsArticle(
-        source = "Wired",
-        title = "The Rise of On-Device AI: Privacy-First Intelligence",
-        description = "As AI models shrink, on-device processing is becoming the preferred approach for privacy-conscious consumers and enterprises.",
-        publishedAt = "6h ago",
-        url = "https://example.com/4",
-        category = "Technology",
-    ),
-    NewsArticle(
-        source = "Science Daily",
-        title = "New Material Could Revolutionize Solar Energy Efficiency",
-        description = "A team of physicists has developed a perovskite-silicon tandem cell achieving record efficiency levels for solar power generation.",
-        publishedAt = "8h ago",
-        url = "https://example.com/5",
-        category = "Science",
-    ),
-    NewsArticle(
-        source = "Bloomberg",
-        title = "Central Banks Signal Cautious Approach to Rate Changes",
-        description = "Major central banks indicate they will take a measured approach to interest rate adjustments amid mixed economic signals.",
-        publishedAt = "10h ago",
-        url = "https://example.com/6",
-        category = "Business",
-    ),
-)
-
-/**
- * Custom tab indicator offset modifier — positions the indicator under the selected tab.
- * Replaces the Material2 tabIndicatorOffset which is not available in Material3.
- */
-private fun Modifier.customTabIndicatorOffset(currentTabPosition: TabPosition): Modifier =
-    this then Modifier
-        .layout { measurable, constraints ->
-            val placeable = measurable.measure(constraints)
-            layout(placeable.width, placeable.height) {
-                placeable.placeRelative(
-                    x = currentTabPosition.left.roundToPx(),
-                    y = 0
-                )
-            }
-        }
-        .width(currentTabPosition.width)

@@ -12,46 +12,20 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.mahi.assistant.ui.components.GlowCard
 import com.mahi.assistant.ui.theme.*
-
-/**
- * Data models for weather.
- */
-data class WeatherData(
-    val cityName: String = "San Francisco",
-    val temp: Int = 22,
-    val description: String = "Partly Cloudy",
-    val icon: String = "⛅",
-    val humidity: Int = 65,
-    val windSpeed: Float = 12.5f,
-    val pressure: Int = 1013,
-    val feelsLike: Int = 20,
-    val forecasts: List<DailyForecast> = emptyList(),
-)
-
-data class DailyForecast(
-    val day: String,
-    val icon: String,
-    val high: Int,
-    val low: Int,
-)
+import com.mahi.assistant.ui.viewmodel.MahiViewModel
 
 /**
  * Weather display screen — holographic weather station.
+ * Now connected to ViewModel for live weather data.
  */
 @Composable
 fun WeatherScreen(
-    weather: WeatherData = WeatherData(
-        forecasts = listOf(
-            DailyForecast("Mon", "☀️", 24, 16),
-            DailyForecast("Tue", "⛅", 22, 15),
-            DailyForecast("Wed", "🌧️", 18, 12),
-            DailyForecast("Thu", "🌦️", 20, 14),
-            DailyForecast("Fri", "☀️", 25, 17),
-        )
-    ),
+    viewModel: MahiViewModel,
     onBack: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    val weatherState by viewModel.weatherState.collectAsState()
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -83,115 +57,165 @@ fun WeatherScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // ── Main Weather Card ───────────────────────────────────
-        GlowCard(
-            modifier = Modifier.fillMaxWidth(),
-            glowColor = NeonCyan,
-            animateGlow = true,
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
+        if (weatherState.isLoading) {
+            // Loading state
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
             ) {
-                // City name
-                Text(
-                    text = weather.cityName.uppercase(),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = TextSecondary,
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = NeonCyan)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Fetching weather data...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary,
+                    )
+                }
+            }
+        } else if (weatherState.error != null) {
+            // Error state
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        imageVector = Icons.Filled.CloudOff,
+                        contentDescription = null,
+                        tint = Amber,
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Could not load weather",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = TextPrimary,
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = weatherState.error ?: "Unknown error",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary,
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Set your OpenWeatherMap API key in Settings",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Amber,
+                    )
+                }
+            }
+        } else if (weatherState.city.isNotEmpty()) {
+            // ── Main Weather Card ───────────────────────────────────
+            GlowCard(
+                modifier = Modifier.fillMaxWidth(),
+                glowColor = NeonCyan,
+                animateGlow = true,
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    // City name
+                    Text(
+                        text = weatherState.city.uppercase(),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = TextSecondary,
+                    )
 
-                Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
 
-                // Weather icon
-                Text(
-                    text = weather.icon,
-                    style = MaterialTheme.typography.displayLarge,
-                )
+                    // Temperature
+                    Text(
+                        text = "${weatherState.temperature.toInt()}°",
+                        style = MaterialTheme.typography.displayMedium.copy(
+                            fontWeight = FontWeight.Bold
+                        ),
+                        color = NeonCyan,
+                    )
 
-                Spacer(modifier = Modifier.height(4.dp))
+                    // Description
+                    Text(
+                        text = weatherState.description.replaceFirstChar { it.uppercase() },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary,
+                    )
+                }
+            }
 
-                // Temperature
-                Text(
-                    text = "${weather.temp}°",
-                    style = MaterialTheme.typography.displayMedium.copy(
-                        fontWeight = FontWeight.Bold
-                    ),
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // ── Detail Cards Row ────────────────────────────────────
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                WeatherDetailCard(
+                    label = "HUMIDITY",
+                    value = "${weatherState.humidity}%",
+                    icon = Icons.Filled.WaterDrop,
+                    modifier = Modifier.weight(1f),
                     color = NeonCyan,
                 )
-
-                // Description
-                Text(
-                    text = weather.description,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = TextSecondary,
+                WeatherDetailCard(
+                    label = "WIND",
+                    value = "${weatherState.windSpeed} km/h",
+                    icon = Icons.Filled.Air,
+                    modifier = Modifier.weight(1f),
+                    color = ElectricPurple,
                 )
             }
-        }
 
-        Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-        // ── Detail Cards Row ────────────────────────────────────
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            WeatherDetailCard(
-                label = "HUMIDITY",
-                value = "${weather.humidity}%",
-                icon = Icons.Filled.WaterDrop,
-                modifier = Modifier.weight(1f),
-                color = NeonCyan,
-            )
-            WeatherDetailCard(
-                label = "WIND",
-                value = "${weather.windSpeed} km/h",
-                icon = Icons.Filled.Air,
-                modifier = Modifier.weight(1f),
-                color = ElectricPurple,
-            )
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            WeatherDetailCard(
-                label = "PRESSURE",
-                value = "${weather.pressure} hPa",
-                icon = Icons.Filled.Speed,
-                modifier = Modifier.weight(1f),
-                color = NeonGreen,
-            )
-            WeatherDetailCard(
-                label = "FEELS LIKE",
-                value = "${weather.feelsLike}°",
-                icon = Icons.Filled.Thermostat,
-                modifier = Modifier.weight(1f),
-                color = Amber,
-            )
-        }
-
-        Spacer(modifier = Modifier.height(20.dp))
-
-        // ── 5-Day Forecast ─────────────────────────────────────
-        Text(
-            text = "5-DAY FORECAST",
-            style = MaterialTheme.typography.labelLarge,
-            color = ElectricPurple,
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-        ) {
-            weather.forecasts.forEach { forecast ->
-                ForecastDayCard(forecast = forecast)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                WeatherDetailCard(
+                    label = "PRESSURE",
+                    value = "${weatherState.pressure} hPa",
+                    icon = Icons.Filled.Speed,
+                    modifier = Modifier.weight(1f),
+                    color = NeonGreen,
+                )
+                WeatherDetailCard(
+                    label = "FEELS LIKE",
+                    value = "${weatherState.feelsLike.toInt()}°",
+                    icon = Icons.Filled.Thermostat,
+                    modifier = Modifier.weight(1f),
+                    color = Amber,
+                )
+            }
+        } else {
+            // No data yet - prompt user to ask
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        imageVector = Icons.Filled.WbSunny,
+                        contentDescription = null,
+                        tint = NeonCyan,
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Ask MAHI for weather",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = TextPrimary,
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Say \"What's the weather?\" to get started",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary,
+                    )
+                }
             }
         }
 
@@ -237,40 +261,3 @@ private fun WeatherDetailCard(
         }
     }
 }
-
-@Composable
-private fun ForecastDayCard(forecast: DailyForecast) {
-    GlowCard(
-        glowColor = NeonCyan,
-        borderAlpha = 0.15f,
-    ) {
-        Column(
-            modifier = Modifier.padding(vertical = 10.dp, horizontal = 8.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(
-                text = forecast.day,
-                style = MaterialTheme.typography.labelSmall,
-                color = TextSecondary,
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = forecast.icon,
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = "${forecast.high}°",
-                style = MaterialTheme.typography.labelMedium,
-                color = TextPrimary,
-            )
-            Text(
-                text = "${forecast.low}°",
-                style = MaterialTheme.typography.labelSmall,
-                color = TextTertiary,
-            )
-        }
-    }
-}
-
-

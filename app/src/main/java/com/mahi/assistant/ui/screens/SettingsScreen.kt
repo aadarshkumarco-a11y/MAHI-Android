@@ -1,5 +1,6 @@
 package com.mahi.assistant.ui.screens
 
+import android.widget.Toast
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
@@ -9,6 +10,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -16,38 +18,45 @@ import androidx.compose.ui.unit.dp
 import com.mahi.assistant.ui.components.GlowCard
 import com.mahi.assistant.ui.components.NeonButton
 import com.mahi.assistant.ui.theme.*
+import com.mahi.assistant.ui.viewmodel.MahiViewModel
+import com.mahi.assistant.ui.viewmodel.SettingsUiState
 
 /**
  * Settings screen — system configuration for MAHI.
+ * Now properly connected to ViewModel for API key persistence.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
+    viewModel: MahiViewModel,
     onBack: () -> Unit = {},
     onRequestNotificationAccess: () -> Unit = {},
     onRequestAccessibility: () -> Unit = {},
     onRequestOverlayPermission: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    // ── API Keys ────────────────────────────────────────────────
-    var geminiKey by remember { mutableStateOf("") }
-    var porcupineKey by remember { mutableStateOf("") }
-    var weatherKey by remember { mutableStateOf("") }
-    var newsKey by remember { mutableStateOf("") }
+    val settingsState by viewModel.settingsState.collectAsState()
+    val context = LocalContext.current
+
+    // Local state for editing - initialized from persisted settings
+    var geminiKey by remember(settingsState.geminiKey) { mutableStateOf(settingsState.geminiKey) }
+    var porcupineKey by remember(settingsState.porcupineKey) { mutableStateOf(settingsState.porcupineKey) }
+    var weatherKey by remember(settingsState.weatherKey) { mutableStateOf(settingsState.weatherKey) }
+    var newsKey by remember(settingsState.newsKey) { mutableStateOf(settingsState.newsKey) }
     var showGeminiKey by remember { mutableStateOf(false) }
     var showPorcupineKey by remember { mutableStateOf(false) }
     var showWeatherKey by remember { mutableStateOf(false) }
     var showNewsKey by remember { mutableStateOf(false) }
 
-    // ── Voice Settings ──────────────────────────────────────────
-    var voiceSpeed by remember { mutableStateOf(1.0f) }
-    var voicePitch by remember { mutableStateOf(1.0f) }
-    var selectedWakeWord by remember { mutableStateOf("Hey Mahi") }
+    // Voice settings - from persisted state
+    var voiceSpeed by remember(settingsState.voiceSpeed) { mutableStateOf(settingsState.voiceSpeed) }
+    var voicePitch by remember(settingsState.voicePitch) { mutableStateOf(settingsState.voicePitch) }
+    var selectedWakeWord by remember(settingsState.wakeWord) { mutableStateOf(settingsState.wakeWord) }
     val wakeWords = listOf("Hey Mahi", "Jarvis", "Computer", "Hey Assistant")
 
-    // ── Toggles ─────────────────────────────────────────────────
-    var autoStartOnBoot by remember { mutableStateOf(true) }
-    var floatingAssistant by remember { mutableStateOf(false) }
+    // Toggles - from persisted state
+    var autoStartOnBoot by remember(settingsState.autoStartOnBoot) { mutableStateOf(settingsState.autoStartOnBoot) }
+    var floatingAssistant by remember(settingsState.floatingAssistant) { mutableStateOf(settingsState.floatingAssistant) }
 
     Column(
         modifier = modifier
@@ -93,7 +102,10 @@ fun SettingsScreen(
                         ApiKeyField(
                             label = "Gemini API Key",
                             value = geminiKey,
-                            onValueChange = { geminiKey = it },
+                            onValueChange = {
+                                geminiKey = it
+                                viewModel.updateGeminiKey(it)
+                            },
                             showKey = showGeminiKey,
                             onToggleVisibility = { showGeminiKey = !showGeminiKey },
                         )
@@ -101,7 +113,10 @@ fun SettingsScreen(
                         ApiKeyField(
                             label = "Porcupine Access Key",
                             value = porcupineKey,
-                            onValueChange = { porcupineKey = it },
+                            onValueChange = {
+                                porcupineKey = it
+                                viewModel.updatePorcupineKey(it)
+                            },
                             showKey = showPorcupineKey,
                             onToggleVisibility = { showPorcupineKey = !showPorcupineKey },
                         )
@@ -109,7 +124,10 @@ fun SettingsScreen(
                         ApiKeyField(
                             label = "OpenWeatherMap API Key",
                             value = weatherKey,
-                            onValueChange = { weatherKey = it },
+                            onValueChange = {
+                                weatherKey = it
+                                viewModel.updateWeatherKey(it)
+                            },
                             showKey = showWeatherKey,
                             onToggleVisibility = { showWeatherKey = !showWeatherKey },
                         )
@@ -117,10 +135,61 @@ fun SettingsScreen(
                         ApiKeyField(
                             label = "GNews API Key",
                             value = newsKey,
-                            onValueChange = { newsKey = it },
+                            onValueChange = {
+                                newsKey = it
+                                viewModel.updateNewsKey(it)
+                            },
                             showKey = showNewsKey,
                             onToggleVisibility = { showNewsKey = !showNewsKey },
                         )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Save button
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            NeonButton(
+                                text = "SAVE ALL",
+                                onClick = {
+                                    viewModel.saveAllSettings()
+                                    Toast.makeText(context, "Settings saved!", Toast.LENGTH_SHORT).show()
+                                },
+                                glowColor = NeonGreen,
+                            )
+                        }
+
+                        // Status indicator
+                        val missingKeys = buildList {
+                            if (geminiKey.isBlank()) add("Gemini")
+                            if (weatherKey.isBlank()) add("Weather")
+                            if (newsKey.isBlank()) add("News")
+                        }
+                        if (missingKeys.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Missing keys: ${missingKeys.joinToString(", ")}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Amber,
+                            )
+                        } else {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Filled.CheckCircle,
+                                    contentDescription = null,
+                                    tint = NeonGreen,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "All API keys configured",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = NeonGreen,
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -146,7 +215,10 @@ fun SettingsScreen(
                             wakeWords.forEach { word ->
                                 FilterChip(
                                     selected = selectedWakeWord == word,
-                                    onClick = { selectedWakeWord = word },
+                                    onClick = {
+                                        selectedWakeWord = word
+                                        viewModel.updateWakeWord(word)
+                                    },
                                     label = {
                                         Text(
                                             text = word,
@@ -178,7 +250,10 @@ fun SettingsScreen(
                         )
                         Slider(
                             value = voiceSpeed,
-                            onValueChange = { voiceSpeed = it },
+                            onValueChange = {
+                                voiceSpeed = it
+                                viewModel.updateVoiceSpeed(it)
+                            },
                             valueRange = 0.5f..2.0f,
                             steps = 5,
                             colors = SliderDefaults.colors(
@@ -198,7 +273,10 @@ fun SettingsScreen(
                         )
                         Slider(
                             value = voicePitch,
-                            onValueChange = { voicePitch = it },
+                            onValueChange = {
+                                voicePitch = it
+                                viewModel.updateVoicePitch(it)
+                            },
                             valueRange = 0.5f..2.0f,
                             steps = 5,
                             colors = SliderDefaults.colors(
@@ -224,7 +302,10 @@ fun SettingsScreen(
                             title = "Auto-start on Boot",
                             description = "Launch MAHI when device boots",
                             isOn = autoStartOnBoot,
-                            onToggle = { autoStartOnBoot = it },
+                            onToggle = {
+                                autoStartOnBoot = it
+                                viewModel.updateAutoStartOnBoot(it)
+                            },
                         )
 
                         Spacer(modifier = Modifier.height(12.dp))
@@ -234,7 +315,10 @@ fun SettingsScreen(
                             title = "Floating Assistant",
                             description = "Show floating bubble overlay",
                             isOn = floatingAssistant,
-                            onToggle = { floatingAssistant = it },
+                            onToggle = {
+                                floatingAssistant = it
+                                viewModel.updateFloatingAssistant(it)
+                            },
                         )
                     }
                 }

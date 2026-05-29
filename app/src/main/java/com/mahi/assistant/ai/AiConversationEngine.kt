@@ -1,42 +1,33 @@
 package com.mahi.assistant.ai
 
-import android.content.Context
-import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.datastore.preferences.preferencesDataStore
-import com.google.gson.Gson
-import com.google.gson.GsonBuilder
+import com.mahi.assistant.data.local.SettingsManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.map
 import retrofit2.HttpException
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
+import com.google.gson.GsonBuilder
 
 /**
  * AiConversationEngine manages the full conversation lifecycle with the
  * Gemini 1.5 Flash API. It handles:
- * - API key persistence via DataStore
+ * - API key retrieval from SettingsManager (SharedPreferences)
  * - Conversation history management
  * - System prompt configuration (MAHI persona)
  * - Error handling and retry logic
  * - Loading state exposure via StateFlow
  */
 class AiConversationEngine(
-    private val context: Context
+    private val settingsManager: SettingsManager
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    private val Context.dataStore by preferencesDataStore(name = "mahi_settings")
-
     companion object {
-        private val KEY_API_KEY = stringPreferencesKey("gemini_api_key")
         private const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta/"
 
         val SYSTEM_PROMPT = """
@@ -52,13 +43,9 @@ class AiConversationEngine(
         """.trimIndent()
     }
 
-    private val gson: Gson = GsonBuilder()
-        .setLenient()
-        .create()
-
     private val retrofit: Retrofit = Retrofit.Builder()
         .baseUrl(BASE_URL)
-        .addConverterFactory(GsonConverterFactory.create(gson))
+        .addConverterFactory(GsonConverterFactory.create(GsonBuilder().setLenient().create()))
         .build()
 
     private val apiService: GeminiApiService = retrofit.create(GeminiApiService::class.java)
@@ -73,22 +60,10 @@ class AiConversationEngine(
     val conversationHistory: StateFlow<List<ChatMessage>> = _conversationHistory.asStateFlow()
 
     /**
-     * Save the Gemini API key to DataStore.
+     * Retrieve the stored Gemini API key from SettingsManager.
      */
-    suspend fun setApiKey(apiKey: String) {
-        context.dataStore.edit { preferences ->
-            preferences[KEY_API_KEY] = apiKey
-        }
-    }
-
-    /**
-     * Retrieve the stored Gemini API key from DataStore.
-     * Returns null if no key has been set.
-     */
-    suspend fun getApiKey(): String? {
-        return context.dataStore.data.map { preferences ->
-            preferences[KEY_API_KEY]
-        }.first()
+    private fun getApiKey(): String {
+        return settingsManager.getGeminiApiKey()
     }
 
     /**
@@ -100,7 +75,6 @@ class AiConversationEngine(
 
     /**
      * Add a message to the conversation history without sending it to the API.
-     * Useful for restoring a previous session.
      */
     fun addToHistory(message: ChatMessage) {
         val current = _conversationHistory.value.toMutableList()
@@ -110,10 +84,6 @@ class AiConversationEngine(
 
     /**
      * Send a user message to the Gemini API and return the model's text response.
-     *
-     * @param message The user's input text.
-     * @param history Optional conversation history to include (defaults to internal history).
-     * @return The model's response text, or an error message string.
      */
     suspend fun sendMessage(
         message: String,
@@ -124,8 +94,8 @@ class AiConversationEngine(
 
         try {
             val apiKey = getApiKey()
-            if (apiKey.isNullOrBlank()) {
-                val errorMsg = "API key not configured. Please set your Gemini API key in settings."
+            if (apiKey.isBlank()) {
+                val errorMsg = "API key not configured. Please set your Gemini API key in Settings."
                 _lastError.value = errorMsg
                 _isLoading.value = false
                 return errorMsg
@@ -166,7 +136,6 @@ class AiConversationEngine(
             val responseText = response.extractText()
 
             if (responseText.isNullOrBlank()) {
-                // Check for safety blocks or other issues
                 val blockReason = response.promptFeedback?.blockReason
                 val finishReason = response.candidates?.firstOrNull()?.finishReason
                 val errorMsg = when {
@@ -189,9 +158,9 @@ class AiConversationEngine(
         } catch (e: HttpException) {
             val errorMsg = when (e.code()) {
                 400 -> "Bad request. Please check your input."
-                401 -> "Invalid API key. Please update your Gemini API key."
+                401 -> "Invalid API key. Please update your Gemini API key in Settings."
                 403 -> "Access forbidden. Check your API key permissions."
-                429 -> "Rate limit exceeded. Please wait a moment and try again."
+                429 -> "Rate limit exceeded. Please wait and try again."
                 500 -> "Gemini server error. Please try again later."
                 503 -> "Gemini service unavailable. Please try again later."
                 else -> "Network error (${e.code()}): ${e.message()}"
@@ -201,7 +170,7 @@ class AiConversationEngine(
             return errorMsg
 
         } catch (e: java.net.UnknownHostException) {
-            val errorMsg = "No internet connection. Please check your network settings."
+            val errorMsg = "No internet connection. Please check your network."
             _lastError.value = errorMsg
             _isLoading.value = false
             return errorMsg
@@ -213,7 +182,7 @@ class AiConversationEngine(
             return errorMsg
 
         } catch (e: Exception) {
-            val errorMsg = "Unexpected error: ${e.message ?: "Unknown error"}"
+            val errorMsg = "Error: ${e.message ?: "Unknown error"}"
             _lastError.value = errorMsg
             _isLoading.value = false
             return errorMsg
@@ -223,13 +192,10 @@ class AiConversationEngine(
     /**
      * Send a single message without maintaining conversation history.
      * Useful for quick one-off queries or intent classification.
-     *
-     * @param message The input text.
-     * @return The model's response text.
      */
     suspend fun queryOnce(message: String): String {
         val apiKey = getApiKey()
-        if (apiKey.isNullOrBlank()) {
+        if (apiKey.isBlank()) {
             return "API key not configured."
         }
 

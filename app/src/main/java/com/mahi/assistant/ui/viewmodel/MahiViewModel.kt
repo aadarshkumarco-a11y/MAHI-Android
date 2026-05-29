@@ -1,5 +1,8 @@
 package com.mahi.assistant.ui.viewmodel
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mahi.assistant.ai.AiConversationEngine
@@ -12,6 +15,7 @@ import com.mahi.assistant.automation.RoutineEngine
 import com.mahi.assistant.control.DeviceControlManager
 import com.mahi.assistant.data.local.MessageDao
 import com.mahi.assistant.data.local.MessageEntity
+import com.mahi.assistant.data.local.SettingsManager
 import com.mahi.assistant.data.model.AssistantState
 import com.mahi.assistant.data.model.ChatMessage
 import com.mahi.assistant.data.model.MessageRole
@@ -63,6 +67,19 @@ data class DeviceUiState(
     val screenTimeout: Int = 30000
 )
 
+data class SettingsUiState(
+    val geminiKey: String = "",
+    val porcupineKey: String = "",
+    val weatherKey: String = "",
+    val newsKey: String = "",
+    val voiceSpeed: Float = 1.0f,
+    val voicePitch: Float = 1.0f,
+    val wakeWord: String = "Hey Mahi",
+    val autoStartOnBoot: Boolean = true,
+    val floatingAssistant: Boolean = false,
+    val isSaved: Boolean = false
+)
+
 @HiltViewModel
 class MahiViewModel @Inject constructor(
     private val aiEngine: AiConversationEngine,
@@ -71,7 +88,8 @@ class MahiViewModel @Inject constructor(
     private val routineEngine: RoutineEngine,
     private val messageDao: MessageDao,
     private val voiceRecognition: VoiceRecognitionEngine,
-    private val ttsEngine: TextToSpeechEngine
+    private val ttsEngine: TextToSpeechEngine,
+    private val settingsManager: SettingsManager
 ) : ViewModel() {
 
     private val _assistantState = MutableStateFlow(AssistantState.IDLE)
@@ -107,9 +125,16 @@ class MahiViewModel @Inject constructor(
     private val _currentRoute = MutableStateFlow("home")
     val currentRoute: StateFlow<String> = _currentRoute.asStateFlow()
 
+    private val _settingsState = MutableStateFlow(SettingsUiState())
+    val settingsState: StateFlow<SettingsUiState> = _settingsState.asStateFlow()
+
+    private val _welcomeMessage = MutableStateFlow<String?>(null)
+    val welcomeMessage: StateFlow<String?> = _welcomeMessage.asStateFlow()
+
     private var processingJob: Job? = null
 
     init {
+        // Load saved messages
         viewModelScope.launch {
             val entities = messageDao.getRecent(50)
             _messages.value = entities.map { entity: MessageEntity ->
@@ -122,6 +147,10 @@ class MahiViewModel @Inject constructor(
             }
         }
 
+        // Load settings
+        loadSettings()
+
+        // Voice recognition callback
         voiceRecognition.callback = object : VoiceRecognitionEngine.Callback {
             override fun onResult(text: String) {
                 _isListening.value = false
@@ -145,22 +174,94 @@ class MahiViewModel @Inject constructor(
             }
         }
 
+        // TTS callback
         ttsEngine.callback = object : TextToSpeechEngine.Callback {
             override fun onSpeakStart(utteranceId: String) { _assistantState.value = AssistantState.SPEAKING }
             override fun onSpeakEnd(utteranceId: String) { _assistantState.value = AssistantState.IDLE }
             override fun onError(utteranceId: String) { _assistantState.value = AssistantState.IDLE }
         }
 
+        // Routines
         viewModelScope.launch {
             routineEngine.availableRoutines.collect { _routines.value = it }
         }
 
+        // Notifications
         viewModelScope.launch {
             MahiNotificationListenerService.instance?.notifications?.collect { _notifications.value = it }
         }
     }
 
+    // ── Settings Management ─────────────────────────────────────────
+
+    fun loadSettings() {
+        _settingsState.value = SettingsUiState(
+            geminiKey = settingsManager.getGeminiApiKey(),
+            porcupineKey = settingsManager.getPorcupineKey(),
+            weatherKey = settingsManager.getWeatherApiKey(),
+            newsKey = settingsManager.getNewsApiKey(),
+            voiceSpeed = settingsManager.getVoiceSpeed(),
+            voicePitch = settingsManager.getVoicePitch(),
+            wakeWord = settingsManager.getWakeWord(),
+            autoStartOnBoot = settingsManager.getAutoStartOnBoot(),
+            floatingAssistant = settingsManager.getFloatingAssistant()
+        )
+    }
+
+    fun updateGeminiKey(key: String) {
+        settingsManager.setGeminiApiKey(key)
+        _settingsState.value = _settingsState.value.copy(geminiKey = key, isSaved = false)
+    }
+
+    fun updatePorcupineKey(key: String) {
+        settingsManager.setPorcupineKey(key)
+        _settingsState.value = _settingsState.value.copy(porcupineKey = key, isSaved = false)
+    }
+
+    fun updateWeatherKey(key: String) {
+        settingsManager.setWeatherApiKey(key)
+        _settingsState.value = _settingsState.value.copy(weatherKey = key, isSaved = false)
+    }
+
+    fun updateNewsKey(key: String) {
+        settingsManager.setNewsApiKey(key)
+        _settingsState.value = _settingsState.value.copy(newsKey = key, isSaved = false)
+    }
+
+    fun updateVoiceSpeed(speed: Float) {
+        settingsManager.setVoiceSpeed(speed)
+        _settingsState.value = _settingsState.value.copy(voiceSpeed = speed)
+    }
+
+    fun updateVoicePitch(pitch: Float) {
+        settingsManager.setVoicePitch(pitch)
+        _settingsState.value = _settingsState.value.copy(voicePitch = pitch)
+    }
+
+    fun updateWakeWord(word: String) {
+        settingsManager.setWakeWord(word)
+        _settingsState.value = _settingsState.value.copy(wakeWord = word)
+    }
+
+    fun updateAutoStartOnBoot(enabled: Boolean) {
+        settingsManager.setAutoStartOnBoot(enabled)
+        _settingsState.value = _settingsState.value.copy(autoStartOnBoot = enabled)
+    }
+
+    fun updateFloatingAssistant(enabled: Boolean) {
+        settingsManager.setFloatingAssistant(enabled)
+        _settingsState.value = _settingsState.value.copy(floatingAssistant = enabled)
+    }
+
+    fun saveAllSettings() {
+        _settingsState.value = _settingsState.value.copy(isSaved = true)
+    }
+
+    // ── Navigation ──────────────────────────────────────────────────
+
     fun navigateTo(route: String) { _currentRoute.value = route }
+
+    // ── Voice ───────────────────────────────────────────────────────
 
     fun startListening() {
         _partialTranscript.value = ""
@@ -175,6 +276,8 @@ class MahiViewModel @Inject constructor(
 
     fun updateInput(text: String) { _currentInput.value = text }
 
+    // ── Chat ────────────────────────────────────────────────────────
+
     fun submitInput() {
         val input = _currentInput.value.trim()
         if (input.isNotBlank()) {
@@ -188,17 +291,21 @@ class MahiViewModel @Inject constructor(
         processingJob = viewModelScope.launch {
             _assistantState.value = AssistantState.THINKING
 
+            // Save user message
             val userMessage = ChatMessage(role = MessageRole.USER, content = input)
             _messages.value = _messages.value + userMessage
             messageDao.insert(MessageEntity(role = "USER", content = input, timestamp = System.currentTimeMillis()))
 
+            // Classify intent and handle
             val intent = intentClassifier.classifySync(input)
             val response = handleIntent(intent, input)
 
+            // Save assistant message
             val assistantMessage = ChatMessage(role = MessageRole.ASSISTANT, content = response)
             _messages.value = _messages.value + assistantMessage
             messageDao.insert(MessageEntity(role = "ASSISTANT", content = response, timestamp = System.currentTimeMillis()))
 
+            // Speak the response
             val speechText = response.replace(Regex("\\[\\w+\\]\\s*"), "").replace(Regex("[\\*#_]"), "").take(500)
             ttsEngine.speak(speechText, "response_${System.currentTimeMillis()}")
         }
@@ -239,7 +346,12 @@ class MahiViewModel @Inject constructor(
     private suspend fun fetchWeather(city: String): String {
         _weatherState.value = _weatherState.value.copy(isLoading = true)
         return try {
-            val weather = WeatherClient.instance.getCurrentWeather(city, "YOUR_OPENWEATHERMAP_API_KEY", "metric")
+            val weatherApiKey = settingsManager.getWeatherApiKey()
+            if (weatherApiKey.isBlank()) {
+                _weatherState.value = _weatherState.value.copy(isLoading = false)
+                return "Weather API key not set. Please add your OpenWeatherMap API key in Settings."
+            }
+            val weather = WeatherClient.instance.getCurrentWeather(city, weatherApiKey, "metric")
             _weatherState.value = WeatherUiState(
                 city = weather.name ?: city,
                 temperature = weather.main?.temp ?: 0.0,
@@ -255,21 +367,26 @@ class MahiViewModel @Inject constructor(
             "Weather in ${weather.name ?: city}: ${(weather.main?.temp ?: 0.0).toInt()} degrees, ${weather.weather?.firstOrNull()?.description ?: "clear"}. Humidity ${weather.main?.humidity ?: 0}%. Feels like ${(weather.main?.feelsLike ?: 0.0).toInt()} degrees."
         } catch (e: Exception) {
             _weatherState.value = _weatherState.value.copy(isLoading = false, error = e.message)
-            "Couldn't fetch weather for $city. Check your API key."
+            "Couldn't fetch weather for $city. ${e.message}"
         }
     }
 
     private suspend fun fetchNews(category: String): String {
         _newsState.value = _newsState.value.copy(isLoading = true, selectedCategory = category)
         return try {
-            val news = NewsClient.instance.getTopHeadlines(category = category, lang = "en", token = "YOUR_GNEWS_API_KEY")
+            val newsApiKey = settingsManager.getNewsApiKey()
+            if (newsApiKey.isBlank()) {
+                _newsState.value = _newsState.value.copy(isLoading = false)
+                return "News API key not set. Please add your GNews API key in Settings."
+            }
+            val news = NewsClient.instance.getTopHeadlines(category = category, lang = "en", token = newsApiKey)
             _newsState.value = NewsUiState(articles = news.articles ?: emptyList(), isLoading = false, selectedCategory = category)
             navigateTo("news")
             if (news.articles.isNullOrEmpty()) "No news articles found."
             else "Top headlines: ${news.articles.take(3).mapIndexed { i, a -> "${i + 1}. ${a.title ?: "Untitled"}" }.joinToString(". ")}"
         } catch (e: Exception) {
             _newsState.value = _newsState.value.copy(isLoading = false, error = e.message)
-            "Couldn't fetch news. Check your API key."
+            "Couldn't fetch news. ${e.message}"
         }
     }
 
@@ -295,8 +412,10 @@ class MahiViewModel @Inject constructor(
                 com.mahi.assistant.ai.ChatMessage(role = it.role.name.lowercase(), content = it.content)
             }
             aiEngine.sendMessage(input, history)
-        } catch (e: Exception) { "Technical difficulty. Please try again." }
+        } catch (e: Exception) { "Technical difficulty. Please try again. Error: ${e.message}" }
     }
+
+    // ── Device Control ──────────────────────────────────────────────
 
     fun toggleDevice(deviceName: String) {
         viewModelScope.launch {

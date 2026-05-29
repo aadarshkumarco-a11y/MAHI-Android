@@ -15,38 +15,25 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.mahi.assistant.data.model.AssistantState
+import com.mahi.assistant.data.model.ChatMessage
+import com.mahi.assistant.data.model.MessageRole
 import com.mahi.assistant.ui.components.*
 import com.mahi.assistant.ui.theme.*
-
-/**
- * Data model for a chat message.
- */
-data class ChatMessage(
-    val id: String = java.util.UUID.randomUUID().toString(),
-    val text: String,
-    val isFromUser: Boolean,
-    val timestamp: Long = System.currentTimeMillis(),
-)
-
-/**
- * The state of the AI assistant in the chat.
- */
-enum class AssistantState {
-    IDLE, THINKING, SPEAKING
-}
+import com.mahi.assistant.ui.viewmodel.MahiViewModel
 
 /**
  * Chat conversation screen — full conversation with the AI assistant.
+ * Now properly connected to ViewModel for real AI responses.
  */
 @Composable
 fun ChatScreen(
-    messages: List<ChatMessage> = emptyList(),
-    assistantState: AssistantState = AssistantState.IDLE,
-    onSendMessage: (String) -> Unit = {},
-    onVoiceInput: () -> Unit = {},
+    viewModel: MahiViewModel,
     onBack: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    val messages by viewModel.messages.collectAsState()
+    val assistantState by viewModel.assistantState.collectAsState()
     var textInput by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
@@ -66,27 +53,62 @@ fun ChatScreen(
         // ── Top Bar ─────────────────────────────────────────────
         ChatTopBar(onBack = onBack, assistantState = assistantState)
 
-        // ── Messages ────────────────────────────────────────────
-        LazyColumn(
-            modifier = Modifier.weight(1f),
-            state = listState,
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            items(messages, key = { it.id }) { message ->
-                MessageBubble(message = message)
-            }
-
-            // Assistant state indicator
-            if (assistantState == AssistantState.THINKING) {
-                item {
-                    ThinkingIndicator()
+        // ── Welcome message if no messages ──────────────────────
+        if (messages.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    MahiOrb(
+                        state = when (assistantState) {
+                            AssistantState.IDLE -> OrbState.IDLE
+                            AssistantState.LISTENING -> OrbState.LISTENING
+                            AssistantState.THINKING -> OrbState.THINKING
+                            AssistantState.SPEAKING -> OrbState.SPEAKING
+                        },
+                        size = 120.dp,
+                        onClick = { viewModel.startListening() },
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "Hello, I am MAHI",
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = NeonCyan,
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Ask me anything to get started",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary,
+                    )
                 }
             }
+        } else {
+            // ── Messages ────────────────────────────────────────────
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                state = listState,
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                items(messages, key = { it.id }) { message ->
+                    MessageBubble(message = message)
+                }
 
-            if (assistantState == AssistantState.SPEAKING) {
-                item {
-                    SpeakingIndicator()
+                // Assistant state indicator
+                if (assistantState == AssistantState.THINKING) {
+                    item {
+                        ThinkingIndicator()
+                    }
+                }
+
+                if (assistantState == AssistantState.SPEAKING) {
+                    item {
+                        SpeakingIndicator()
+                    }
                 }
             }
         }
@@ -97,11 +119,11 @@ fun ChatScreen(
             onValueChange = { textInput = it },
             onSubmit = {
                 if (textInput.isNotBlank()) {
-                    onSendMessage(textInput)
+                    viewModel.processInput(textInput)
                     textInput = ""
                 }
             },
-            onMicClick = onVoiceInput,
+            onMicClick = { viewModel.startListening() },
         )
     }
 }
@@ -127,11 +149,13 @@ private fun ChatTopBar(
                 Spacer(modifier = Modifier.width(8.dp))
                 val stateText = when (assistantState) {
                     AssistantState.IDLE -> ""
+                    AssistantState.LISTENING -> "listening..."
                     AssistantState.THINKING -> "thinking..."
                     AssistantState.SPEAKING -> "speaking..."
                 }
                 val stateColor = when (assistantState) {
                     AssistantState.IDLE -> TextTertiary
+                    AssistantState.LISTENING -> NeonCyan
                     AssistantState.THINKING -> ElectricPurple
                     AssistantState.SPEAKING -> NeonGreen
                 }
@@ -162,18 +186,18 @@ private fun ChatTopBar(
 
 @Composable
 private fun MessageBubble(message: ChatMessage) {
-    val alignment = if (message.isFromUser) Alignment.End else Alignment.Start
-    val bubbleColor = if (message.isFromUser) {
+    val isFromUser = message.role == MessageRole.USER
+    val alignment = if (isFromUser) Alignment.End else Alignment.Start
+    val bubbleColor = if (isFromUser) {
         ElectricPurple.copy(alpha = 0.15f)
     } else {
         NeonCyan.copy(alpha = 0.08f)
     }
-    val borderColor = if (message.isFromUser) {
+    val borderColor = if (isFromUser) {
         ElectricPurple.copy(alpha = 0.3f)
     } else {
         NeonCyan.copy(alpha = 0.3f)
     }
-    val textColor = if (message.isFromUser) TextPrimary else TextPrimary
 
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -183,9 +207,8 @@ private fun MessageBubble(message: ChatMessage) {
             modifier = Modifier
                 .widthIn(max = 280.dp)
                 .then(
-                    if (!message.isFromUser) {
+                    if (!isFromUser) {
                         Modifier.drawBehind {
-                            // Simulate glow with semi-transparent rounded rect
                             drawRoundRect(
                                 color = NeonCyan.copy(alpha = 0.15f),
                                 cornerRadius = androidx.compose.ui.geometry.CornerRadius(12.dp.toPx(), 12.dp.toPx())
@@ -196,8 +219,8 @@ private fun MessageBubble(message: ChatMessage) {
             shape = RoundedCornerShape(
                 topStart = 12.dp,
                 topEnd = 12.dp,
-                bottomStart = if (message.isFromUser) 12.dp else 4.dp,
-                bottomEnd = if (message.isFromUser) 4.dp else 12.dp,
+                bottomStart = if (isFromUser) 12.dp else 4.dp,
+                bottomEnd = if (isFromUser) 4.dp else 12.dp,
             ),
             color = bubbleColor,
             border = androidx.compose.foundation.BorderStroke(1.dp, borderColor),
@@ -205,16 +228,16 @@ private fun MessageBubble(message: ChatMessage) {
             Column(modifier = Modifier.padding(12.dp)) {
                 // Sender label
                 Text(
-                    text = if (message.isFromUser) "YOU" else "MAHI",
+                    text = if (isFromUser) "YOU" else "MAHI",
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (message.isFromUser) ElectricPurple else NeonCyan,
+                    color = if (isFromUser) ElectricPurple else NeonCyan,
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 // Message content
                 Text(
-                    text = message.text,
+                    text = message.content,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = textColor,
+                    color = TextPrimary,
                 )
             }
         }
@@ -223,17 +246,6 @@ private fun MessageBubble(message: ChatMessage) {
 
 @Composable
 private fun ThinkingIndicator() {
-    val dotAlpha = remember { Animatable(0.3f) }
-    LaunchedEffect(Unit) {
-        dotAlpha.animateTo(
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(800, easing = EaseInOutSine),
-                repeatMode = RepeatMode.Reverse
-            )
-        )
-    }
-
     Row(
         modifier = Modifier.padding(start = 16.dp, top = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),

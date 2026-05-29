@@ -6,12 +6,12 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
-import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
-import androidx.navigation.navArgument
 import com.mahi.assistant.ui.screens.*
+import com.mahi.assistant.ui.viewmodel.MahiViewModel
 
 /**
  * Navigation routes for the MAHI app.
@@ -28,7 +28,7 @@ object MahiRoutes {
 
 /**
  * NavHost for the MAHI app — defines all screen routes
- * and their transitions.
+ * and their transitions. Now properly connected to ViewModel.
  */
 @Composable
 fun MahiNavHost(
@@ -46,7 +46,9 @@ fun MahiNavHost(
             enterTransition = { fadeIn(animationSpec = androidx.compose.animation.core.tween(300)) },
             exitTransition = { fadeOut(animationSpec = androidx.compose.animation.core.tween(200)) },
         ) {
+            val viewModel: MahiViewModel = hiltViewModel()
             HomeScreen(
+                viewModel = viewModel,
                 onNavigateToChat = {
                     navController.navigate(MahiRoutes.CHAT)
                 },
@@ -62,34 +64,25 @@ fun MahiNavHost(
                 onNavigateToRoutines = {
                     navController.navigate(MahiRoutes.ROUTINES)
                 },
-                onVoiceInput = {
-                    // Triggered from ViewModel in production
-                },
-                onTextSubmit = { text ->
-                    // Navigate to chat with text
-                    navController.navigate(MahiRoutes.CHAT)
-                },
             )
         }
 
         // ── Chat ────────────────────────────────────────────────
         composable(MahiRoutes.CHAT) {
+            val viewModel: MahiViewModel = hiltViewModel()
             ChatScreen(
+                viewModel = viewModel,
                 onBack = {
                     navController.popBackStack()
-                },
-                onVoiceInput = {
-                    // Triggered from ViewModel in production
-                },
-                onSendMessage = { message ->
-                    // Handled by ViewModel in production
                 },
             )
         }
 
         // ── Controls ────────────────────────────────────────────
         composable(MahiRoutes.CONTROLS) {
+            val viewModel: MahiViewModel = hiltViewModel()
             ControlScreen(
+                viewModel = viewModel,
                 onBack = {
                     navController.popBackStack()
                 },
@@ -98,7 +91,9 @@ fun MahiNavHost(
 
         // ── Weather ─────────────────────────────────────────────
         composable(MahiRoutes.WEATHER) {
+            val viewModel: MahiViewModel = hiltViewModel()
             WeatherScreen(
+                viewModel = viewModel,
                 onBack = {
                     navController.popBackStack()
                 },
@@ -107,12 +102,14 @@ fun MahiNavHost(
 
         // ── News ────────────────────────────────────────────────
         composable(MahiRoutes.NEWS) {
+            val viewModel: MahiViewModel = hiltViewModel()
             NewsScreen(
+                viewModel = viewModel,
+                onArticleClick = { url ->
+                    // Open URL in browser via Intent - handled in MainActivity
+                },
                 onBack = {
                     navController.popBackStack()
-                },
-                onArticleClick = { url ->
-                    // Open URL in browser via Intent
                 },
             )
         }
@@ -124,7 +121,7 @@ fun MahiNavHost(
                     navController.popBackStack()
                 },
                 onActivateRoutine = { routineId ->
-                    // Handled by ViewModel in production
+                    // Handled by ViewModel
                 },
                 onCreateCustom = {
                     // Navigate to custom routine creation
@@ -134,7 +131,9 @@ fun MahiNavHost(
 
         // ── Settings ────────────────────────────────────────────
         composable(MahiRoutes.SETTINGS) {
+            val viewModel: MahiViewModel = hiltViewModel()
             SettingsScreen(
+                viewModel = viewModel,
                 onBack = {
                     navController.popBackStack()
                 },

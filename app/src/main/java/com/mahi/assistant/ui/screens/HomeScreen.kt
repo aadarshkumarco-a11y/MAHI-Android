@@ -13,26 +13,28 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.mahi.assistant.data.model.AssistantState
 import com.mahi.assistant.ui.components.*
 import com.mahi.assistant.ui.theme.*
+import com.mahi.assistant.ui.viewmodel.MahiViewModel
 import java.text.SimpleDateFormat
 import java.util.*
 
 /**
  * The main Home Screen — the JARVIS command center.
+ * Now properly connected to ViewModel for AI interaction.
  */
 @Composable
 fun HomeScreen(
+    viewModel: MahiViewModel,
     onNavigateToChat: () -> Unit = {},
     onNavigateToControls: () -> Unit = {},
     onNavigateToWeather: () -> Unit = {},
     onNavigateToNews: () -> Unit = {},
     onNavigateToRoutines: () -> Unit = {},
-    onVoiceInput: () -> Unit = {},
-    onTextSubmit: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    var orbState by remember { mutableStateOf(OrbState.IDLE) }
+    val assistantState by viewModel.assistantState.collectAsState()
     var textInput by remember { mutableStateOf("") }
 
     // Time-based greeting
@@ -46,6 +48,14 @@ fun HomeScreen(
 
     val currentTime = remember {
         SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+    }
+
+    // Map AssistantState to OrbState
+    val orbState = when (assistantState) {
+        AssistantState.IDLE -> OrbState.IDLE
+        AssistantState.LISTENING -> OrbState.LISTENING
+        AssistantState.THINKING -> OrbState.THINKING
+        AssistantState.SPEAKING -> OrbState.SPEAKING
     }
 
     Box(modifier = modifier.fillMaxSize()) {
@@ -84,13 +94,7 @@ fun HomeScreen(
                 state = orbState,
                 size = 200.dp,
                 onClick = {
-                    orbState = when (orbState) {
-                        OrbState.IDLE -> OrbState.LISTENING
-                        OrbState.LISTENING -> OrbState.THINKING
-                        OrbState.THINKING -> OrbState.SPEAKING
-                        OrbState.SPEAKING -> OrbState.IDLE
-                    }
-                    onVoiceInput()
+                    viewModel.startListening()
                 },
             )
 
@@ -145,14 +149,13 @@ fun HomeScreen(
                 onValueChange = { textInput = it },
                 onSubmit = {
                     if (textInput.isNotBlank()) {
-                        onTextSubmit(textInput)
+                        viewModel.processInput(textInput)
                         textInput = ""
                         onNavigateToChat()
                     }
                 },
                 onMicClick = {
-                    orbState = OrbState.LISTENING
-                    onVoiceInput()
+                    viewModel.startListening()
                 },
             )
 
