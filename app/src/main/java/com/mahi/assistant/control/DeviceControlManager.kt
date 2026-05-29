@@ -92,7 +92,9 @@ class DeviceControlManager @Inject constructor(
     init {
         // Defer initialization — permissions are NOT granted at Hilt-create time.
         // Accessing Bluetooth/Camera here would throw SecurityException on Android 12+.
+        // Using IO dispatcher to avoid blocking main thread during app startup.
         scope.launch {
+            kotlinx.coroutines.delay(1000) // Wait 1s for app to fully start before querying hardware
             try { refreshAllStates() } catch (e: Exception) {
                 android.util.Log.w("DeviceControlManager", "refreshAllStates failed (permissions not granted yet)", e)
             }

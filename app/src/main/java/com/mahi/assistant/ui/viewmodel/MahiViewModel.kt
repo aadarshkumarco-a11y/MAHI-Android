@@ -223,6 +223,8 @@ class MahiViewModel @Inject constructor(
     )
 
     init {
+        android.util.Log.d("MahiViewModel", "ViewModel init starting...")
+
         // Load conversation history from Room and pass to AI engine as context
         viewModelScope.launch {
             try {
@@ -234,10 +236,8 @@ class MahiViewModel @Inject constructor(
                         timestamp = entity.timestamp
                     )
                 }
-                // Load context into AI engine for memory
                 aiEngine.loadContext(chatMessages)
 
-                // Also load into UI messages
                 _messages.value = entities.map { entity: MessageEntity ->
                     ChatMessage(
                         id = entity.id.toString(),
@@ -246,13 +246,18 @@ class MahiViewModel @Inject constructor(
                         timestamp = entity.timestamp
                     )
                 }
-            } catch (_: Exception) { }
+                android.util.Log.d("MahiViewModel", "Loaded ${entities.size} messages from DB")
+            } catch (e: Exception) {
+                android.util.Log.e("MahiViewModel", "Failed to load messages", e)
+            }
         }
 
         // Load continuous mode state
-        _continuousMode.value = settingsManager.isContinuousMode()
+        try { _continuousMode.value = settingsManager.isContinuousMode() } catch (_: Exception) { }
 
-        try { loadSettings() } catch (_: Exception) { }
+        try { loadSettings() } catch (e: Exception) {
+            android.util.Log.e("MahiViewModel", "Failed to load settings", e)
+        }
 
         try {
             voiceRecognition.callback = object : VoiceRecognitionEngine.Callback {
@@ -261,7 +266,9 @@ class MahiViewModel @Inject constructor(
                     _assistantState.value = AssistantState.IDLE
                     if (text.isNotBlank()) processInput(text)
                 }
-                override fun onPartial(text: String) { _partialTranscript.value = text }
+                override fun onPartial(text: String) {
+                    try { _partialTranscript.value = text } catch (_: Exception) {}
+                }
                 override fun onError(code: Int) {
                     _isListening.value = false
                     _assistantState.value = AssistantState.IDLE
@@ -277,21 +284,28 @@ class MahiViewModel @Inject constructor(
                     }
                 }
             }
-        } catch (_: Exception) { }
+        } catch (e: Exception) {
+            android.util.Log.e("MahiViewModel", "Failed to set voiceRecognition callback", e)
+        }
 
         try {
             ttsEngine.callback = object : TextToSpeechEngine.Callback {
-                override fun onSpeakStart(utteranceId: String) { _assistantState.value = AssistantState.SPEAKING }
+                override fun onSpeakStart(utteranceId: String) {
+                    _assistantState.value = AssistantState.SPEAKING
+                }
                 override fun onSpeakEnd(utteranceId: String) {
                     _assistantState.value = AssistantState.IDLE
-                    // In continuous mode, start listening again after speaking
                     if (_continuousMode.value) {
-                        startListening()
+                        try { startListening() } catch (_: Exception) {}
                     }
                 }
-                override fun onError(utteranceId: String) { _assistantState.value = AssistantState.IDLE }
+                override fun onError(utteranceId: String) {
+                    _assistantState.value = AssistantState.IDLE
+                }
             }
-        } catch (_: Exception) { }
+        } catch (e: Exception) {
+            android.util.Log.e("MahiViewModel", "Failed to set ttsEngine callback", e)
+        }
 
         viewModelScope.launch {
             try { routineEngine.availableRoutines.collect { _routines.value = it } } catch (_: Exception) { }
@@ -299,6 +313,8 @@ class MahiViewModel @Inject constructor(
         viewModelScope.launch {
             try { MahiNotificationListenerService.instance?.notifications?.collect { _notifications.value = it } } catch (_: Exception) { }
         }
+
+        android.util.Log.d("MahiViewModel", "ViewModel init completed")
     }
 
     // ── Settings ──────────────────────────────────────────────────────────

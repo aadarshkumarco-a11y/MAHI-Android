@@ -1,10 +1,12 @@
 package com.mahi.assistant.voice
 
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -13,9 +15,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * VoiceRecognitionEngine wraps Android's SpeechRecognizer API to provide
- * speech-to-text capabilities with StateFlow-based state management and
- * a callback interface for lifecycle events.
+ * VoiceRecognitionEngine wraps Android's SpeechRecognizer API.
+ *
+ * CRITICAL FIX: SpeechRecognizer is NOT created in the init block anymore.
+ * It is lazily created on first startListening() call on the main thread.
+ * This prevents crashes when Hilt creates this singleton on a background thread.
  */
 class VoiceRecognitionEngine(
     private val context: android.content.Context
@@ -29,9 +33,9 @@ class VoiceRecognitionEngine(
         fun onEnd() {}
     }
 
-    // SpeechRecognizer must be created on the main thread with an Activity context.
-    // Since Hilt provides Application context, we lazily create it and handle errors gracefully.
+    // SpeechRecognizer is now LAZILY created — NOT in init block
     private var speechRecognizer: SpeechRecognizer? = null
+    private var isRecognizerInitialized = false
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
@@ -46,13 +50,6 @@ class VoiceRecognitionEngine(
 
     var callback: Callback? = null
 
-    private val recognizerIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
-        putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-        putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-    }
-
     private val recognitionListener = object : RecognitionListener {
 
         override fun onReadyForSpeech(params: Bundle?) {
@@ -60,17 +57,11 @@ class VoiceRecognitionEngine(
             callback?.onReady()
         }
 
-        override fun onBeginningOfSpeech() {
-            // Speech input has begun; no action required
-        }
+        override fun onBeginningOfSpeech() {}
 
-        override fun onRmsChanged(rmsdB: Float) {
-            // Audio volume change; could be exposed for VU meter UI
-        }
+        override fun onRmsChanged(rmsdB: Float) {}
 
-        override fun onBufferReceived(buffer: ByteArray?) {
-            // Raw audio buffer received; not needed for standard STT
-        }
+        override fun onBufferReceived(buffer: ByteArray?) {}
 
         override fun onEndOfSpeech() {
             _isListening.value = false
@@ -79,7 +70,6 @@ class VoiceRecognitionEngine(
 
         override fun onError(error: Int) {
             _isListening.value = false
-            val errorMessage = translateErrorCode(error)
             _partialResult.value = null
             callback?.onError(error)
         }
@@ -104,20 +94,36 @@ class VoiceRecognitionEngine(
             }
         }
 
-        override fun onEvent(eventType: Int, params: Bundle?) {
-            // Reserved for future use by Android framework
-        }
+        override fun onEvent(eventType: Int, params: Bundle?) {}
     }
 
+    // NO SpeechRecognizer creation in init — prevents crash on non-main thread
     init {
-        // SpeechRecognizer is created lazily in startListening() because:
-        // 1. It requires the main thread looper which may not be ready during Hilt init
-        // 2. Application context may not work on all devices - we handle the error
-        try {
-            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context)
+        Log.d("VoiceRecognition", "VoiceRecognitionEngine created (SpeechRecognizer will be lazy)")
+    }
+
+    /**
+     * Lazily create SpeechRecognizer on the main thread.
+     * Must be called from the main thread.
+     */
+    private fun ensureRecognizerCreated(): Boolean {
+        if (isRecognizerInitialized && speechRecognizer != null) return true
+
+        return try {
+            if (!SpeechRecognizer.isRecognitionAvailable(context)) {
+                Log.w("VoiceRecognition", "Speech recognition not available on this device")
+                return false
+            }
+            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context.applicationContext)
             speechRecognizer?.setRecognitionListener(recognitionListener)
+            isRecognizerInitialized = true
+            Log.d("VoiceRecognition", "SpeechRecognizer created successfully")
+            true
         } catch (e: Exception) {
-            // Will be retried in startListening()
+            Log.e("VoiceRecognition", "Failed to create SpeechRecognizer", e)
+            speechRecognizer = null
+            isRecognizerInitialized = false
+            false
         }
     }
 
@@ -125,23 +131,33 @@ class VoiceRecognitionEngine(
      * Start listening for speech input.
      */
     fun startListening() {
-        if (!SpeechRecognizer.isRecognitionAvailable(context)) {
+        if (!ensureRecognizerCreated()) {
             callback?.onError(SpeechRecognizer.ERROR_CLIENT)
             return
         }
-        // Recreate recognizer if it was destroyed or failed to init
-        if (speechRecognizer == null) {
-            try {
-                speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context)
-                speechRecognizer?.setRecognitionListener(recognitionListener)
-            } catch (e: Exception) {
-                callback?.onError(SpeechRecognizer.ERROR_CLIENT)
-                return
-            }
+
+        val recognizerIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
         }
+
         _partialResult.value = null
         _finalResult.value = null
-        speechRecognizer?.startListening(recognizerIntent)
+
+        try {
+            speechRecognizer?.startListening(recognizerIntent)
+        } catch (e: Exception) {
+            Log.e("VoiceRecognition", "startListening failed", e)
+            // Try recreating the recognizer
+            try {
+                speechRecognizer?.destroy()
+            } catch (_: Exception) {}
+            speechRecognizer = null
+            isRecognizerInitialized = false
+            callback?.onError(SpeechRecognizer.ERROR_CLIENT)
+        }
     }
 
     /**
@@ -149,7 +165,9 @@ class VoiceRecognitionEngine(
      */
     fun stopListening() {
         if (_isListening.value) {
-            speechRecognizer?.stopListening()
+            try {
+                speechRecognizer?.stopListening()
+            } catch (_: Exception) {}
         }
     }
 
@@ -157,18 +175,22 @@ class VoiceRecognitionEngine(
      * Cancel the current recognition without producing a result.
      */
     fun cancel() {
-        speechRecognizer?.cancel()
+        try {
+            speechRecognizer?.cancel()
+        } catch (_: Exception) {}
         _isListening.value = false
         _partialResult.value = null
     }
 
     /**
      * Release all resources held by the SpeechRecognizer.
-     * Must be called when this engine is no longer needed.
      */
     fun destroy() {
-        speechRecognizer?.destroy()
+        try {
+            speechRecognizer?.destroy()
+        } catch (_: Exception) {}
         speechRecognizer = null
+        isRecognizerInitialized = false
         _isListening.value = false
         _partialResult.value = null
         _finalResult.value = null
@@ -176,9 +198,6 @@ class VoiceRecognitionEngine(
     }
 
     companion object {
-        /**
-         * Translate SpeechRecognizer error codes to human-readable messages.
-         */
         fun translateErrorCode(errorCode: Int): String = when (errorCode) {
             SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network timeout"
             SpeechRecognizer.ERROR_NETWORK -> "Network error"

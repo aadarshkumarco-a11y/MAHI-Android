@@ -45,11 +45,16 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
+        try {
+            super.onCreate(savedInstanceState)
+        } catch (e: Exception) {
+            Log.e(TAG, "super.onCreate() failed", e)
+            finish()
+            return
+        }
 
         try {
             // Register broadcast receiver for floating assistant commands
-            // Android 14+ (API 34) REQUIRES RECEIVER_EXPORTED or RECEIVER_NOT_EXPORTED flag
             val filter = IntentFilter().apply {
                 addAction("com.mahi.assistant.VOICE_COMMAND")
                 addAction("com.mahi.assistant.TEXT_COMMAND")
@@ -63,8 +68,21 @@ class MainActivity : ComponentActivity() {
             Log.e(TAG, "Failed to register commandReceiver", e)
         }
 
-        setContent {
-            MahiApp()
+        try {
+            setContent {
+                MahiApp()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "CRITICAL: setContent failed — app cannot render UI", e)
+            // Try a minimal fallback UI
+            try {
+                setContent {
+                    androidx.compose.material3.Text("MAHI encountered an error. Please restart.")
+                }
+            } catch (e2: Exception) {
+                Log.e(TAG, "Even fallback UI failed", e2)
+                finish()
+            }
         }
     }
 

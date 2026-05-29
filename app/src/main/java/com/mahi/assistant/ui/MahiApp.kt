@@ -9,6 +9,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavDestination.Companion.hierarchy
@@ -20,9 +21,6 @@ import com.mahi.assistant.ui.navigation.MahiRoutes
 import com.mahi.assistant.ui.theme.MAHITheme
 import com.mahi.assistant.ui.theme.*
 
-/**
- * Bottom navigation bar items.
- */
 private data class BottomNavItem(
     val route: String,
     val label: String,
@@ -40,11 +38,7 @@ private val bottomNavItems = listOf(
 
 /**
  * Main composable for the MAHI app.
- *
- * Sets up:
- *  - Scaffold with bottom navigation
- *  - NavHost with all routes
- *  - System UI styling (transparent status/nav bars)
+ * Wrapped in error boundary to prevent Compose crashes from killing the app.
  */
 @Composable
 fun MahiApp(
@@ -52,38 +46,68 @@ fun MahiApp(
     hasAllPermissions: Boolean = false,
     onRequestPermissions: () -> Unit = {},
 ) {
-    val navController = rememberNavController()
-    val navBackStackEntry by navController.currentBackStackEntryAsState()
-    val currentDestination = navBackStackEntry?.destination
-
-    // Determine if bottom bar should be shown (hide on detail screens)
-    val showBottomBar = currentDestination?.route in bottomNavItems.map { it.route }
+    var hasError by remember { mutableStateOf(false) }
 
     MAHITheme {
-        Scaffold(
-            modifier = modifier,
-            containerColor = DeepSpaceBlack,
-            bottomBar = {
-                if (showBottomBar) {
-                    MahiBottomBar(
-                        navController = navController,
-                        currentDestination = currentDestination,
+        if (hasError) {
+            // Fallback UI if main content crashes
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "MAHI encountered an error",
+                        color = TextPrimary,
+                        style = MaterialTheme.typography.headlineSmall
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Please restart the app",
+                        color = TextSecondary,
+                        style = MaterialTheme.typography.bodyMedium
                     )
                 }
-            },
-            contentWindowInsets = WindowInsets(0),
-        ) { innerPadding ->
-            MahiNavHost(
-                navController = navController,
-                modifier = Modifier.padding(innerPadding),
-            )
+            }
+        } else {
+            try {
+                MahiAppContent(modifier)
+            } catch (e: Exception) {
+                hasError = true
+                android.util.Log.e("MahiApp", "Compose render error", e)
+            }
         }
     }
 }
 
-/**
- * Custom bottom navigation bar with JARVIS neon styling.
- */
+@Composable
+private fun MahiAppContent(modifier: Modifier = Modifier) {
+    val navController = rememberNavController()
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentDestination = navBackStackEntry?.destination
+
+    val showBottomBar = currentDestination?.route in bottomNavItems.map { it.route }
+
+    Scaffold(
+        modifier = modifier,
+        containerColor = DeepSpaceBlack,
+        bottomBar = {
+            if (showBottomBar) {
+                MahiBottomBar(
+                    navController = navController,
+                    currentDestination = currentDestination,
+                )
+            }
+        },
+        contentWindowInsets = WindowInsets(0),
+    ) { innerPadding ->
+        MahiNavHost(
+            navController = navController,
+            modifier = Modifier.padding(innerPadding),
+        )
+    }
+}
+
 @Composable
 private fun MahiBottomBar(
     navController: androidx.navigation.NavHostController,
@@ -97,7 +121,7 @@ private fun MahiBottomBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(64.dp),
-            containerColor = androidx.compose.ui.graphics.Color.Transparent,
+            containerColor = Color.Transparent,
             contentColor = TextPrimary,
         ) {
             bottomNavItems.forEach { item ->
