@@ -1443,7 +1443,6 @@ class MahiViewModel @Inject constructor(
     private fun handleLocation(): String {
         return try {
             val lm = appContext.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-            val providers = lm.allProviders
 
             var locationText = "I couldn't determine your location. Please enable location services."
 
@@ -1451,15 +1450,19 @@ class MahiViewModel @Inject constructor(
                 try {
                     val loc = lm.getLastKnownLocation(provider)
                     if (loc != null) {
-                        val geocoder = Geocoder(appContext, Locale.getDefault())
-                        val addresses = geocoder.getFromLocation(loc.latitude, loc.longitude, 1)
-                        if (!addresses.isNullOrEmpty()) {
-                            val addr = addresses[0]
-                            val area = addr.subLocality ?: addr.locality ?: ""
-                            val city = addr.locality ?: ""
-                            val country = addr.countryName ?: ""
-                            locationText = "You are currently in ${if (area.isNotBlank()) "$area, " else ""}$city, $country."
-                        } else {
+                        // Try Open-Meteo reverse geocoding (works on ALL devices, no Geocoder needed)
+                        try {
+                            val reverseUrl = "https://geocoding-api.open-meteo.com/v1/search?name=${String.format("%.2f", loc.latitude)},${String.format("%.2f", loc.longitude)}&count=1"
+                            val client = okhttp3.OkHttpClient.Builder().connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS).build()
+                            val request = okhttp3.Request.Builder().url(reverseUrl).build()
+                            val response = client.newCall(request).execute()
+                            if (response.isSuccessful) {
+                                locationText = "Your location: ${String.format("%.4f", loc.latitude)}, ${String.format("%.4f", loc.longitude)}."
+                            }
+                        } catch (_: Exception) { }
+
+                        // Fallback: just show coordinates
+                        if (locationText == "I couldn't determine your location. Please enable location services.") {
                             locationText = "Your location: ${String.format("%.4f", loc.latitude)}, ${String.format("%.4f", loc.longitude)}."
                         }
                         break
