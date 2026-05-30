@@ -673,6 +673,26 @@ User input: """.trimIndent()
             hasDevanagari && (input.contains("क्या") || input.contains("कैसे") || input.contains("कहां") || input.contains("कब") || input.contains("क्यों") || input.contains("कौन") || input.contains("है") || input.contains("हूं") || input.contains("हो") || input.contains("बताओ") || input.contains("करो") || input.contains("दिखाओ") || input.contains("भेजो") || input.contains("चाहिए")) ->
                 IntentResult(IntentType.GENERAL_CHAT, "hindi_general_chat")
 
+            // ── FOLLOW-UP QUESTION PATTERNS (pronouns → GENERAL_CHAT so AI uses context) ──
+            lower.matches(Regex("""(?i).*how old is (he|she|it|they|him|her).*""")) ||
+            lower.matches(Regex("""(?i).*where (was|is|did) (he|she|it|they|him|her).*""")) ||
+            lower.matches(Regex("""(?i).*when (was|is|did) (he|she|it|they|him|her).*""")) ||
+            lower.matches(Regex("""(?i).*what (did|does|is) (he|she|it|they|him|her).*""")) ||
+            lower.matches(Regex("""(?i).*who is (he|she|it|they|him|her).*""")) ||
+            lower.matches(Regex("""(?i).*how about (him|her|it|them).*""")) ||
+            lower.matches(Regex("""(?i).*what about (him|her|it|them).*""")) ||
+            lower.matches(Regex("""(?i).*tell me more (about )?.*""")) ||
+            lower.contains("aur batao") || lower.contains("aur kya") || lower.contains("aur bata") ->
+                IntentResult(IntentType.GENERAL_CHAT, "follow_up_question")
+
+            // ── GREETING PATTERNS → GENERAL_CHAT (AI handles with personality) ──
+            lower.matches(Regex("""(?i)^(hey|hi|hello|yo|sup|what'?s up|hola)\s*(mahi)?$""")) ||
+            lower.matches(Regex("""(?i)^(kaise ho|kya hal|kya haal|namaste|namaskar).*""")) ||
+            lower.matches(Regex("""(?i)^(good (morning|afternoon|evening|night)).*""")) ||
+            lower.matches(Regex("""(?i)^(hey mahi|hello mahi|hi mahi|sup mahi).*""")) ||
+            lower.matches(Regex("""(?i)^(how are you|how r u|kya hal hai|kaise ho).*""")) ->
+                IntentResult(IntentType.GENERAL_CHAT, "greeting")
+
             // ── EXISTING HINGLISH/ENGLISH PATTERNS ──
 
             // Emergency SOS

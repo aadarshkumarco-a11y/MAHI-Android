@@ -175,6 +175,17 @@ class MahiViewModel @Inject constructor(
 
     private var processingJob: Job? = null
 
+    // WhatsApp confirmation state machine
+    private val _whatsappPendingContact = MutableStateFlow<String?>(null)
+    val whatsappPendingContact: StateFlow<String?> = _whatsappPendingContact.asStateFlow()
+    private var _whatsappPendingMessage: String? = null
+    private var _whatsappPendingNumber: String? = null
+    private var _whatsappStep: Int = 0 // 0=idle, 1=awaiting confirmation, 2=awaiting message, 3=awaiting send confirmation
+
+    // Voice session tracking for auto-enabling continuous mode
+    private var _isVoiceSession = false
+    private var _voiceInputCount = 0
+
     // ── App package map ──────────────────────────────────────────────────────
 
     private val appPackageMap = mapOf(
@@ -283,7 +294,7 @@ class MahiViewModel @Inject constructor(
                 override fun onResult(text: String) {
                     _isListening.value = false
                     if (text.isNotBlank()) {
-                        processInput(text)
+                        processInput(text, fromVoice = true)
                     } else if (_continuousMode.value) {
                         // Empty result in continuous mode — restart listening after brief pause
                         viewModelScope.launch {
@@ -485,19 +496,67 @@ class MahiViewModel @Inject constructor(
     // MAIN BRAIN - Process any input with MAX intelligence
     // ══════════════════════════════════════════════════════════════════════
 
-    fun processInput(input: String) {
+    fun processInput(input: String, fromVoice: Boolean = false) {
         processingJob?.cancel()
         processingJob = viewModelScope.launch {
             _assistantState.value = AssistantState.THINKING
+
+            // Auto-enable continuous mode after 2nd voice input in a session
+            if (fromVoice) {
+                _isVoiceSession = true
+                _voiceInputCount++
+                if (_voiceInputCount >= 2 && !_continuousMode.value) {
+                    updateContinuousMode(true)
+                }
+            }
+
+            // Check WhatsApp confirmation flow first
+            if (_whatsappStep > 0) {
+                val waResponse = handleWhatsAppConfirmation(input)
+                val assistantMessage = ChatMessage(role = MessageRole.ASSISTANT, content = waResponse)
+                _messages.value = _messages.value + ChatMessage(role = MessageRole.USER, content = input) + assistantMessage
+                try { messageDao.insert(MessageEntity(role = "USER", content = input, timestamp = System.currentTimeMillis())) } catch (_: Exception) { }
+                try { messageDao.insert(MessageEntity(role = "ASSISTANT", content = waResponse, timestamp = System.currentTimeMillis())) } catch (_: Exception) { }
+                val speechText = waResponse.replace(Regex("""\[\w+\]\s*"""), "").replace(Regex("""[*#_]"""), "").take(500)
+                ttsEngine.speak(speechText, "response_${System.currentTimeMillis()}")
+                return@launch
+            }
 
             // Save user message
             val userMessage = ChatMessage(role = MessageRole.USER, content = input)
             _messages.value = _messages.value + userMessage
             try { messageDao.insert(MessageEntity(role = "USER", content = input, timestamp = System.currentTimeMillis())) } catch (_: Exception) { }
 
+            // Greeting detection — respond with personality
+            val greetingResponse = detectGreeting(input)
+            if (greetingResponse != null) {
+                val assistantMessage = ChatMessage(role = MessageRole.ASSISTANT, content = greetingResponse)
+                _messages.value = _messages.value + assistantMessage
+                try { messageDao.insert(MessageEntity(role = "ASSISTANT", content = greetingResponse, timestamp = System.currentTimeMillis())) } catch (_: Exception) { }
+                val speechText = greetingResponse.replace(Regex("""[*#_]"""), "").take(500)
+                ttsEngine.speak(speechText, "response_${System.currentTimeMillis()}")
+                return@launch
+            }
+
             // Classify using AI-powered classifier (regex first, then Gemini)
             val intent = intentClassifier.classify(input)
-            val response = handleIntent(intent, input)
+            var response = handleIntent(intent, input)
+
+            // Handle FALLBACK_TO_SEARCH from AI engine — never show to user
+            if (response == "FALLBACK_TO_SEARCH") {
+                response = try {
+                    val searchResult = com.mahi.assistant.api.WebSearchService.search(input)
+                    if (searchResult.isNotBlank() && searchResult.length > 20) {
+                        val isHindi = com.mahi.assistant.api.WebSearchService.isHindiText(input)
+                        if (isHindi) "Mujhe ye mila: ${searchResult.take(500)}"
+                        else "Here's what I found: ${searchResult.take(500)}"
+                    } else {
+                        "I'm having trouble connecting right now, Boss. Let me try again in a moment."
+                    }
+                } catch (e: Exception) {
+                    "I'm having a moment — my AI services are warming up. Try again in a sec!"
+                }
+            }
 
             // Save assistant message
             val assistantMessage = ChatMessage(role = MessageRole.ASSISTANT, content = response)
@@ -516,9 +575,171 @@ class MahiViewModel @Inject constructor(
                 aiEngine.loadContext(recentMessages)
             } catch (_: Exception) { }
 
+            // Proactively save important user memories from this exchange
+            try { saveUserMemory(input) } catch (_: Exception) { }
+
             // Speak the response
-            val speechText = response.replace(Regex("\\[\\w+\\]\\s*"), "").replace(Regex("[\\*#_]"), "").take(500)
+            val speechText = response.replace(Regex("""\[\w+\]\s*"""), "").replace(Regex("""[*#_]"""), "").take(500)
             ttsEngine.speak(speechText, "response_${System.currentTimeMillis()}")
+        }
+    }
+
+    /**
+     * Detect greeting patterns and return a time-based, personality-rich response.
+     * Returns null if input is not a greeting.
+     */
+    private fun detectGreeting(input: String): String? {
+        val lower = input.lowercase().trim()
+        val greetingPatterns = listOf(
+            """^(hey|hi|hello|yo|sup|what'?s up|hola)\s*(mahi)?$""".toRegex(RegexOption.IGNORE_CASE),
+            """^(kaise\s+ho|kya\s+hal|kya\s+haal|namaste|namaskar)""".toRegex(RegexOption.IGNORE_CASE),
+            """^(good\s+(morning|afternoon|evening|night))\s*(mahi)?$""".toRegex(RegexOption.IGNORE_CASE),
+            """^(hey\s+mahi|hello\s+mahi|hi\s+mahi)""".toRegex(RegexOption.IGNORE_CASE)
+        )
+
+        val isGreeting = greetingPatterns.any { it.containsMatchIn(lower) }
+        if (!isGreeting) return null
+
+        // Also check it's short enough to be a greeting (not "hello how is the weather")
+        if (lower.split("\\s+".toRegex()).size > 5) return null
+
+        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        val isHindi = _currentLanguage.value == "hi"
+
+        // Try to use user's name from memories
+        val userName = try {
+            val memories = readUserMemories()
+            val nameMatch = Regex("""name[:\s]+(\w+)""", RegexOption.IGNORE_CASE).find(memories)
+            nameMatch?.groupValues?.get(1)
+        } catch (_: Exception) { null }
+
+        val nameGreet = userName ?: "Boss"
+
+        return when {
+            hour in 5..11 -> if (isHindi) "Good morning, $nameGreet! Aaj ka din shubh ho. Batao kya madad karun?"
+                             else "Good morning, $nameGreet! Ready to take on the day. What can I do for you?"
+            hour in 12..16 -> if (isHindi) "Good afternoon, $nameGreet! Din kaisa ja raha hai? Kuch help chahiye?"
+                              else "Good afternoon, $nameGreet! How's the day going? Need anything?"
+            hour in 17..20 -> if (isHindi) "Good evening, $nameGreet! Kya haal hai? Batao kya chahiye!"
+                              else "Good evening, $nameGreet! Winding down or still grinding? I'm here either way."
+            else -> if (isHindi) "Hey $nameGreet! Itni raat jaag rahe ho? Kya help chahiye?"
+                    else "Hey $nameGreet! Burning the midnight oil? What do you need?"
+        }
+    }
+
+    /**
+     * WhatsApp confirmation state machine.
+     * Step 0: idle (normal flow)
+     * Step 1: "I found [Name]. Should I open WhatsApp for them?"
+     * Step 2: "What message should I send?"
+     * Step 3: "Ready to send '[msg]' to [name]. Confirm?"
+     */
+    private fun handleWhatsAppConfirmation(input: String): String {
+        val lower = input.lowercase().trim()
+        val isYes = lower.matches(Regex("""(?i)^(yes|yeah|yep|haan|ha|ok|okay|sure|confirm|send|bhejo|karo|thik|correct|right)$"""))
+        val isNo = lower.matches(Regex("""(?i)^(no|nahi|nope|cancel|stop|mat)"""))
+
+        return when (_whatsappStep) {
+            1 -> {
+                // Awaiting confirmation to proceed with WhatsApp
+                if (isYes) {
+                    if (_whatsappPendingMessage.isNullOrBlank()) {
+                        _whatsappStep = 2
+                        "What message should I send to ${_whatsappPendingContact.value}?"
+                    } else {
+                        _whatsappStep = 3
+                        "Ready to send '${_whatsappPendingMessage}' to ${_whatsappPendingContact.value}. Confirm?"
+                    }
+                } else if (isNo) {
+                    resetWhatsAppState()
+                    "Okay, cancelled. No message will be sent."
+                } else {
+                    "Please say yes to confirm or no to cancel."
+                }
+            }
+            2 -> {
+                // Awaiting message content
+                _whatsappPendingMessage = input
+                _whatsappStep = 3
+                "Ready to send '$input' to ${_whatsappPendingContact.value}. Confirm?"
+            }
+            3 -> {
+                // Awaiting final send confirmation
+                if (isYes) {
+                    val contact = _whatsappPendingContact.value ?: ""
+                    val message = _whatsappPendingMessage ?: ""
+                    val number = _whatsappPendingNumber
+                    resetWhatsAppState()
+                    // Actually send the WhatsApp message now
+                    executeWhatsAppSend(contact, number, message)
+                } else if (isNo) {
+                    resetWhatsAppState()
+                    "Okay, cancelled. No message will be sent."
+                } else {
+                    "Please say yes to send or no to cancel."
+                }
+            }
+            else -> {
+                resetWhatsAppState()
+                "Something went wrong. Please try again."
+            }
+        }
+    }
+
+    private fun resetWhatsAppState() {
+        _whatsappStep = 0
+        _whatsappPendingContact.value = null
+        _whatsappPendingMessage = null
+        _whatsappPendingNumber = null
+    }
+
+    /**
+     * Actually execute the WhatsApp send after confirmation.
+     */
+    private fun executeWhatsAppSend(contact: String, phoneNumber: String?, message: String?): String {
+        return try {
+            if (phoneNumber != null) {
+                val waNumber = phoneNumber.replace(Regex("""[^\d]"""), "")
+                if (message != null && message.isNotBlank()) {
+                    val waIntent = Intent(Intent.ACTION_VIEW).apply {
+                        data = Uri.parse("https://wa.me/$waNumber?text=${URLEncoder.encode(message, "UTF-8")}")
+                        setPackage("com.whatsapp")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    appContext.startActivity(waIntent)
+                    "Opening WhatsApp chat with $contact. Message ready to send!"
+                } else {
+                    val waIntent = Intent(Intent.ACTION_VIEW).apply {
+                        data = Uri.parse("https://wa.me/$waNumber")
+                        setPackage("com.whatsapp")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    appContext.startActivity(waIntent)
+                    "Opening WhatsApp chat with $contact."
+                }
+            } else {
+                if (message != null && message.isNotBlank()) {
+                    val intent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, message)
+                        setPackage("com.whatsapp")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    appContext.startActivity(intent)
+                    "Opening WhatsApp with your message. Select $contact from your contacts."
+                } else {
+                    val launchIntent = appContext.packageManager.getLaunchIntentForPackage("com.whatsapp")
+                    if (launchIntent != null) {
+                        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        appContext.startActivity(launchIntent)
+                        "Opening WhatsApp."
+                    } else {
+                        "WhatsApp is not installed on your device."
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            "Couldn't open WhatsApp. ${e.message}"
         }
     }
 
@@ -637,99 +858,35 @@ class MahiViewModel @Inject constructor(
             }
         }
 
+        // SAFETY: Contact must be verified before sending. Start confirmation flow.
         return try {
-            // Try to resolve contact to phone number
             val phoneNumber = if (contact.isNotBlank() && contact != "unknown") lookupContactPhoneNumber(contact) else null
 
-            if (phoneNumber != null) {
-                // Clean the phone number: digits only, no +, no spaces
-                val waNumber = phoneNumber.replace(Regex("[^\\d]"), "")
+            if (phoneNumber != null || (contact.isNotBlank() && contact != "unknown")) {
+                // Found a contact (or at least have a name) — enter confirmation flow
+                _whatsappPendingContact.value = contact
+                _whatsappPendingMessage = message
+                _whatsappPendingNumber = phoneNumber
+                _whatsappStep = 1
 
                 if (message != null && message.isNotBlank()) {
-                    // PRIMARY METHOD: wa.me deep link with setPackage (most reliable)
-                    try {
-                        val waIntent = Intent(Intent.ACTION_VIEW).apply {
-                            data = Uri.parse("https://wa.me/$waNumber?text=${URLEncoder.encode(message, "UTF-8")}")
-                            setPackage("com.whatsapp")
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        }
-                        appContext.startActivity(waIntent)
-                        return "Opening WhatsApp chat with $contact. Message ready to send."
-                    } catch (_: Exception) {
-                        // FALLBACK METHOD 1: Browser wa.me link
-                        try {
-                            val webIntent = Intent(Intent.ACTION_VIEW).apply {
-                                data = Uri.parse("https://wa.me/$waNumber?text=${URLEncoder.encode(message, "UTF-8")}")
-                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            }
-                            appContext.startActivity(webIntent)
-                            return "Opening WhatsApp web for $contact."
-                        } catch (_: Exception) {
-                            // FALLBACK METHOD 2: ACTION_SHARE with text
-                            val intent = Intent(Intent.ACTION_SEND).apply {
-                                type = "text/plain"
-                                putExtra(Intent.EXTRA_TEXT, message)
-                                setPackage("com.whatsapp")
-                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            }
-                            appContext.startActivity(intent)
-                            return "Opening WhatsApp with your message for $contact."
-                        }
-                    }
+                    "I found $contact. Should I send a message to them on WhatsApp?"
                 } else {
-                    // No message — just open chat with contact via wa.me
-                    try {
-                        val intent = Intent(Intent.ACTION_VIEW).apply {
-                            data = Uri.parse("https://wa.me/$waNumber")
-                            setPackage("com.whatsapp")
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        }
-                        appContext.startActivity(intent)
-                        return "Opening WhatsApp chat with $contact."
-                    } catch (_: Exception) {
-                        val webIntent = Intent(Intent.ACTION_VIEW).apply {
-                            data = Uri.parse("https://wa.me/$waNumber")
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        }
-                        appContext.startActivity(webIntent)
-                        return "Opening WhatsApp for $contact."
-                    }
+                    "I found $contact. Should I open WhatsApp chat with them?"
                 }
-            } else if (message != null && message.isNotBlank()) {
-                // No phone number found — use ACTION_SEND so user picks contact in WhatsApp
-                val intent = Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(Intent.EXTRA_TEXT, message)
-                    setPackage("com.whatsapp")
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                appContext.startActivity(intent)
-                "Opening WhatsApp with your message. Select $contact from your WhatsApp contacts."
             } else {
-                // Just open WhatsApp — couldn't find contact
+                // No contact found at all — just open WhatsApp
                 val launchIntent = appContext.packageManager.getLaunchIntentForPackage("com.whatsapp")
                 if (launchIntent != null) {
                     launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     appContext.startActivity(launchIntent)
-                    "Opening WhatsApp. I couldn't find $contact's number in your contacts."
+                    "Opening WhatsApp. I couldn't find $contact in your contacts."
                 } else {
                     "WhatsApp is not installed on your device."
                 }
             }
         } catch (e: Exception) {
-            // Ultimate fallback: try opening WhatsApp
-            try {
-                val launchIntent = appContext.packageManager.getLaunchIntentForPackage("com.whatsapp")
-                if (launchIntent != null) {
-                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    appContext.startActivity(launchIntent)
-                    "Opening WhatsApp."
-                } else {
-                    "WhatsApp is not installed. ${e.message}"
-                }
-            } catch (_: Exception) {
-                "Couldn't open WhatsApp. ${e.message}"
-            }
+            "Couldn't process WhatsApp request. ${e.message}"
         }
     }
 
@@ -2325,9 +2482,14 @@ class MahiViewModel @Inject constructor(
                 val response = aiEngine.chatWithMemory(input, fullHistory)
 
                 // If the response looks like an error, fall through to web search
-                if (response.contains("trouble connecting") || response.contains("check your internet") ||
+                val isErrorResponse = response == "FALLBACK_TO_SEARCH" ||
+                    response.contains("trouble connecting") || response.contains("check your internet") ||
                     response.contains("API key") || response.contains("having trouble") ||
-                    response.contains("No AI backend") || response == "NO_AI_CONFIGURED" || response == "AI_BACKENDS_FAILED") {
+                    response.contains("No AI backend") || response.contains("KEY_INVALID") ||
+                    response.contains("ACCESS_DENIED") || response.contains("timed out") ||
+                    response.contains("internet connection") || response.contains("server error") ||
+                    response.contains("unavailable") || response.contains("rate limit")
+                if (isErrorResponse) {
                     // AI failed — use research results directly if available
                     if (researchResults.isNotBlank() && researchResults.length > 30) {
                         return summarizeResearch(input, researchResults, responseLang)

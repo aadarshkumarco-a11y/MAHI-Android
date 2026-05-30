@@ -69,10 +69,17 @@ object WebSearchService {
             "meaning of", "definition of", "define",
             "history of", "origin of", "cause of",
             "difference between", "compare", "vs",
+            "how old is", "how old was", "where was he", "where was she",
+            "when was he", "when was she", "what did he", "what did she",
+            "who is his", "who is her", "how tall is", "how much is",
+            "how about him", "how about her", "what about him", "what about her",
+            "tell me more about", "more about", "more info",
+            "is it true", "is it real", "fact check",
             "kya hai", "kaun hai", "kahan hai", "kab hua", "kyon hai",
             "kaise hai", "kitna hai", "kitne hai",
             "batao", "samjhao", "dikhao", "pata karo",
-            "khabar", "mausam", "update"
+            "khabar", "mausam", "update",
+            "uska naam", "uski umar", "uske baare", "uska phone"
         )
 
         // Casual chat that does NOT need research
@@ -80,8 +87,21 @@ object WebSearchService {
             "hello", "hi ", "hey", "how are you", "how r u", "kya hal",
             "good morning", "good night", "good evening", "good afternoon",
             "thank", "thanks", "ok", "okay", "nice", "cool", "great",
-            "haan", "nahi", "thik hai", "accha", "theek", "sahi"
+            "haan", "nahi", "thik hai", "accha", "theek", "sahi",
+            "yes", "no", "maybe", "sure", "done", "stop"
         )
+
+        // Pronoun-heavy follow-ups that need context — always research these
+        val followUpPatterns = listOf(
+            "how old is he", "how old is she", "where was he", "where was she",
+            "when did he", "when did she", "what did he", "what did she",
+            "who is he", "who is she", "what is it", "where is it",
+            "how about him", "how about her", "what about him", "what about her",
+            "tell me more", "more about that", "what else", "and then"
+        )
+
+        // Follow-up patterns always need research
+        if (followUpPatterns.any { q.contains(it) }) return true
 
         // If it's casual chat, no research needed
         if (casualPatterns.any { q.contains(it) } && q.length < 30) return false
@@ -217,6 +237,16 @@ object WebSearchService {
             }
         } catch (_: Exception) { }
 
+        // ── SOURCE 3.5: DuckDuckGo HTML search (NO API key needed!) ───
+        if (results.isEmpty()) {
+            try {
+                val ddgHtmlResult = searchDuckDuckGoHtml(query)
+                if (ddgHtmlResult.isNotBlank() && ddgHtmlResult.length > 30) {
+                    results.add(ddgHtmlResult)
+                }
+            } catch (_: Exception) { }
+        }
+
         // If Hindi query failed, try English version too
         if (isHindi && results.isEmpty()) {
             try {
@@ -299,6 +329,16 @@ object WebSearchService {
                 allResults.add("Web Search" to braveResult)
             }
         } catch (_: Exception) { }
+
+        // Source 3.5: DuckDuckGo HTML (no API key needed)
+        if (allResults.isEmpty()) {
+            try {
+                val ddgHtmlResult = searchDuckDuckGoHtml(searchQuery)
+                if (ddgHtmlResult.isNotBlank() && ddgHtmlResult.length > 30) {
+                    allResults.add("DuckDuckGo Web" to ddgHtmlResult)
+                }
+            } catch (_: Exception) { }
+        }
 
         // Source 4: News (for current events)
         try {
@@ -455,6 +495,79 @@ object WebSearchService {
             combined
         } catch (e: Exception) {
             ""
+        }
+    }
+
+    /**
+     * Search DuckDuckGo HTML results — NO API key needed!
+     * Scrapes DuckDuckGo HTML search for results when API and Brave fail.
+     * This is the ROBUST fallback that always works.
+     */
+    private fun searchDuckDuckGoHtml(query: String): String {
+        return try {
+            val encodedQuery = URLEncoder.encode(query, "UTF-8")
+            val url = "https://html.duckduckgo.com/html/?q=$encodedQuery"
+
+            val request = Request.Builder()
+                .url(url)
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36")
+                .build()
+
+            val response = client.newCall(request).execute()
+            val html = response.body?.string() ?: return ""
+
+            if (html.isBlank()) return ""
+
+            // Parse HTML for result titles and snippets
+            val results = mutableListOf<String>()
+            val resultRegex = Regex("""<a[^>]*class="result__a"[^>]*>(.*?)</a>.*?<a[^>]*class="result__snippet"[^>]*>(.*?)</a>""", RegexOption.DOT_MATCHES_ALL)
+            resultRegex.findAll(html).take(5).forEach { match ->
+                val title = match.groupValues[1].replace(Regex("""<[^>]+>"""), "").trim()
+                val snippet = match.groupValues[2].replace(Regex("""<[^>]+>"""), "").trim()
+                if (title.isNotBlank()) {
+                    results.add(if (snippet.isNotBlank()) "$title: $snippet" else title)
+                }
+            }
+
+            // Fallback: try simpler parsing if the regex above didn't find results
+            if (results.isEmpty()) {
+                val simpleTitleRegex = Regex("""class="result__a"[^>]*>(.*?)</a>""")
+                simpleTitleRegex.findAll(html).take(5).forEach { match ->
+                    val title = match.groupValues[1].replace(Regex("""<[^>]+>"""), "").trim()
+                    if (title.isNotBlank() && title.length > 5) {
+                        results.add(title)
+                    }
+                }
+            }
+
+            results.joinToString("\n").take(1000)
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
+    /**
+     * Quick answers for common questions that don't need full research.
+     * Returns a direct answer or empty string if no quick answer available.
+     */
+    fun quickAnswer(query: String): String {
+        val q = query.lowercase().trim()
+        val isHindi = isHindiText(query)
+
+        return when {
+            q.contains("time") && (q.contains("what") || q.contains("samay") || q.length < 10) -> {
+                val time = SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date())
+                if (isHindi) "Abhi ka time $time hai." else "Current time is $time."
+            }
+            q.contains("date") && (q.contains("what") || q.contains("tarikh") || q.length < 10) -> {
+                val date = SimpleDateFormat("dd MMMM yyyy, EEEE", Locale.getDefault()).format(Date())
+                if (isHindi) "Aaj ki date $date hai." else "Today's date is $date."
+            }
+            q.contains("day") && q.contains("what") -> {
+                val day = SimpleDateFormat("EEEE", Locale.getDefault()).format(Date())
+                if (isHindi) "Aaj $day hai." else "Today is $day."
+            }
+            else -> "" // No quick answer available
         }
     }
 

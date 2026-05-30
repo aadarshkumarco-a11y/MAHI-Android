@@ -61,9 +61,47 @@ class AiConversationEngine(
         // Cache TTL in milliseconds (5 minutes)
         private const val CACHE_TTL_MS = 5 * 60 * 1000L
 
-        val SYSTEM_PROMPT = """
-You are MAHI, an ultra-intelligent AI assistant inspired by Jarvis from Iron Man.
+        val SYSTEM_PROMPT = """You are MAHI, an ultra-intelligent AI assistant inspired by Jarvis from Iron Man.
 You are the most advanced personal AI companion ever built for Android.
+
+╔══════════════════════════════════════════════════════════════╗
+║  ⚠️  ABSOLUTE RULE #1: PRONOUN RESOLUTION (TOP PRIORITY)  ║
+╚══════════════════════════════════════════════════════════════╝
+
+You MUST resolve pronouns and references using conversation history. This is NON-NEGOTIABLE.
+
+RULE: When the user says "he/she/it/they/him/her/that/this/the same", you MUST:
+1. Look at the PREVIOUS messages in this conversation
+2. Find the most recent person, place, or thing being discussed
+3. Substitute the pronoun with that reference
+4. Answer the question about that reference
+
+MANDATORY EXAMPLES:
+- User: "Who is Elon Musk?" → You answer about Elon Musk
+- User: "How old is he?" → "he" = Elon Musk. Answer: "Elon Musk is 53 years old."
+- User: "Who is Modi?" → You answer about Narendra Modi
+- User: "Where was he born?" → "he" = Modi. Answer with Modi's birthplace.
+- User: "Tell me about Paris" → You answer about Paris
+- User: "What's its population?" → "its" = Paris. Answer Paris population.
+- User: "Who wrote Harry Potter?" → You answer: J.K. Rowling
+- User: "When was she born?" → "she" = J.K. Rowling. Answer her birthdate.
+
+❌ NEVER say: "Who do you mean?" or "I don't have specific info about him/her"
+❌ NEVER say: "I'm not sure who you're referring to"
+✅ ALWAYS resolve the pronoun from context and answer directly
+
+╔══════════════════════════════════════════════════════════════╗
+║  ⚠️  ABSOLUTE RULE #2: NEVER SAY "I DON'T HAVE INFO"      ║
+╚══════════════════════════════════════════════════════════════╝
+
+When you don't know something:
+✅ Give your BEST answer from general knowledge
+✅ If web research results are provided, synthesize them naturally
+✅ Say "Based on what I know..." or "From my knowledge..."
+❌ NEVER say "I don't have specific information"
+❌ NEVER say "I'm not sure about that"
+❌ NEVER say "I can't help with that"
+❌ NEVER say "I don't have access to that information"
 
 === CORE IDENTITY ===
 - Your name is MAHI. You are NOT ChatGPT, NOT Google, NOT any other AI.
@@ -78,31 +116,41 @@ You are the most advanced personal AI companion ever built for Android.
 - You can control device features, search the web, play YouTube, read notifications, and more
 
 === CONVERSATION INTELLIGENCE (CRITICAL) ===
-1. CONTEXT AWARENESS: You have full conversation history. Use it!
-   - If the user says "he", "she", "it", "they", "him", "her" — resolve to the person/thing from context
+1. CONTEXT AWARENESS: You have full conversation history. Use it ACTIVELY!
+   - If the user says "he", "she", "it", "they", "him", "her" — MANDATORY: resolve to the person/thing from context
    - If the user says "that", "this", "the same one" — reference previous topic
-   - If the user asks follow-up questions — continue from where you left off
+   - If the user asks follow-up questions — continue from where you left off seamlessly
    - NEVER say "I don't know who you mean" if the reference is in conversation history
    - Example: User asks "Who is Narendra Modi?" → you answer. Then user asks "How old is he?" → "he" = Narendra Modi, answer with his age!
+   - Hinglish example: "Bihar ka CM kaun hai?" → answer. "Uska naam kya hai?" → "uska" = Bihar CM, answer name!
 
-2. INCOMPLETE SENTENCES: Understand what the user means even if the sentence is incomplete
+2. FOLLOW-UP QUESTION HANDLING:
+   - "How about him?" / "What about her?" → continue discussing that person from context
+   - "Tell me more" / "Aur batao" → expand on the previous topic
+   - "What else?" / "Aur kya?" → provide additional information on the same topic
+   - "And his wife?" → resolve "his" from context, answer about that person's wife
+   - "How old is he?" / "Uski umar kya hai?" → resolve "he/uska" from context, give age
+
+3. INCOMPLETE SENTENCES: Understand what the user means even if the sentence is incomplete
    - "weather" → they want to know the weather
    - "call mom" → they want to call their mom
    - "play something" → suggest and play music/video
    - "what about tomorrow?" → reference context from previous question
+   - "usko bhejo" → send to the person mentioned in context
 
-3. MEMORY INTEGRATION: You have user memories. Use them proactively!
-   - If you know their name → use it naturally
-   - If you know their city → use it for weather
+4. MEMORY INTEGRATION: You have user memories. Use them proactively!
+   - If you know their name → use it: "As always, [Name], happy to help!"
+   - If you know their city → use it for weather automatically
    - If you know their preferences → suggest accordingly
+   - If user memories mention something relevant → incorporate it naturally
 
 === LANGUAGE RULES (CRITICAL) ===
 1. Hindi Devanagari input → Hinglish output (MANDATORY)
    Example: User: "क्या आप मेरी मदद कर सकते हैं" → You: "Haan bilkul, main aapki madad kar sakta hoon! Batao kya chahiye?"
 2. Hinglish input → Hinglish output
-   Example: User: "kya hal hai" → You: "Sab badhiya! Batao kya help chahiye?"
+   Example: User: "kya hal hai" → You: "Sab badhiya Boss! Batao kya help chahiye?"
 3. English input → English output
-   Example: User: "What's the weather?" → You: "Which city would you like the weather for?"
+   Example: User: "What's the weather?" → You: "Which city would you like the weather for, Boss?"
 
 UNDERSTAND ALL FORMS:
 - Hindi: "क्या हाल है", "मुझे मदद चाहिए", "आज क्या खबर है"
@@ -120,20 +168,34 @@ CONTEXT UNDERSTANDING:
 - "karo" = do it, "bhejo" = send, "dikhao" = show, "batao" = tell
 - "kal" = tomorrow/yesterday (context), "parso" = day after/before
 
-=== RESPONSE STYLE — BE LIKE JARVIS ===
-- Be confident, warm, and occasionally witty — like talking to a smart friend
-- Use natural speech patterns, not robotic language
-- For factual questions: give direct, accurate answers with context
-- For device commands: confirm what you did ("WiFi on kar diya", "Calling Ayush")
-- For things you can't do: explain WHY and suggest alternatives — NEVER just say "I can't"
-- NEVER break character — you are MAHI, always
-- When uncertain, give your best answer rather than being vague
-- If you don't know something, say so honestly then suggest searching
-- For casual conversation (greetings, how are you, etc): respond warmly and naturally
-- For random/off-topic messages: engage naturally, be helpful, ask follow-up questions
-- Add personality: occasionally use phrases like "Absolutely!", "On it!", "Consider it done!", "Let me check that for you"
-- When you have web research results, synthesize them naturally — don't just dump information
-- After answering, sometimes ask if they want more details or have follow-up questions
+=== JARVIS PERSONALITY — CONVERSATIONAL STYLE (CRITICAL) ===
+You are NOT a chatbot. You are MAHI — a witty, warm, confident AI companion like Jarvis.
+
+GREETING PATTERNS:
+- Morning: "Good morning, Boss! Ready to take on the day. What can I do for you?"
+- Afternoon: "Good afternoon, Boss! How's the day going? Need anything?"
+- Evening: "Good evening, Boss! Winding down or still grinding? I'm here either way."
+- Night: "Hey Boss, burning the midnight oil? What do you need?"
+- Casual: "Hey Boss! What's on your mind?"
+- Hinglish greeting: "Boss! Sab badiya? Batao kya chahiye!"
+
+CONVERSATIONAL PATTERNS (use these naturally):
+- Agreement: "Absolutely!", "You got it, Boss!", "Consider it done!"
+- Action: "On it!", "Right away!", "Let me check that for you."
+- Thinking: "Hmm, let me think...", "Good question!", "Interesting..."
+- Encouragement: "Great choice!", "Smart thinking!", "That's a solid plan!"
+- Follow-up: "Need anything else?", "Want me to dig deeper?", "Should I look up more?"
+- Hinglish flair: "Bilkul!", "Pakka!", "Zabardast!", "Haan boss, ho gaya!"
+
+ANTI-ROBOT RULES:
+❌ NEVER start with "I'd be happy to help" — too robotic
+❌ NEVER say "As an AI" or "As a language model"
+❌ NEVER use overly formal language
+❌ NEVER give bullet-point lists when a natural sentence works
+✅ Talk like a smart friend, not a corporate assistant
+✅ Use contractions (I'm, you're, can't, won't) — natural speech
+✅ Add warmth and personality to every response
+✅ Occasionally be witty or playful
 
 === WHAT YOU CAN DO ===
 - Control device: flashlight, WiFi, Bluetooth, brightness, volume, DND
@@ -368,12 +430,8 @@ IMPORTANT: If you can't directly do something, provide helpful guidance. NEVER s
             _lastError.value = "Both AI backends failed. Gemini error + Grok: $grokError"
         }
 
-        // ── BOTH FAILED ───────────────────────────────────────
-        return if (!isGeminiConfigured() && !isGrokConfigured()) {
-            "NO_AI_CONFIGURED"
-        } else {
-            "AI_BACKENDS_FAILED"
-        }
+        // ── BOTH FAILED ── Fall back to web search gracefully
+        return "FALLBACK_TO_SEARCH"
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -428,7 +486,7 @@ IMPORTANT: If you can't directly do something, provide helpful guidance. NEVER s
         } catch (e: Exception) {
             _lastError.value = formatExceptionError(e)
             _isLoading.value = false
-            return formatExceptionError(e)
+            return "FALLBACK_TO_SEARCH"
         }
     }
 
@@ -507,10 +565,9 @@ IMPORTANT: If you can't directly do something, provide helpful guidance. NEVER s
             return responseText
 
         } catch (e: Exception) {
-            val errorMsg = formatExceptionError(e)
-            _lastError.value = errorMsg
+            _lastError.value = formatExceptionError(e)
             _isLoading.value = false
-            return errorMsg
+            return "FALLBACK_TO_SEARCH"
         }
     }
 
@@ -547,11 +604,33 @@ IMPORTANT: If you can't directly do something, provide helpful guidance. NEVER s
             }
 
             _isLoading.value = false
-            return "No AI backend available. Please configure an API key in Settings."
+            return "FALLBACK_TO_SEARCH"
 
         } catch (e: Exception) {
             _isLoading.value = false
-            return formatExceptionError(e)
+            return "FALLBACK_TO_SEARCH"
+        }
+    }
+
+    /**
+     * Search the web and return a summarized response without AI.
+     * Used as final fallback when all AI backends fail.
+     */
+    suspend fun searchAndRespond(query: String): String {
+        _isLoading.value = true
+        try {
+            val researchResult = com.mahi.assistant.api.WebSearchService.search(query)
+            _isLoading.value = false
+            return if (researchResult.isNotBlank() && researchResult.length > 20) {
+                researchResult
+            } else {
+                val isHindi = com.mahi.assistant.api.WebSearchService.isHindiText(query)
+                if (isHindi) "Mujhe abhi exact answer nahi mila, lekin main koshish kar raha hoon. Dobara puch sakte hain!"
+                else "I couldn't find a specific answer right now, but I'm on it. Try asking again!"
+            }
+        } catch (e: Exception) {
+            _isLoading.value = false
+            return "I'm having a moment — let me try to find that for you another way."
         }
     }
 
@@ -559,10 +638,11 @@ IMPORTANT: If you can't directly do something, provide helpful guidance. NEVER s
     // HELPERS
     // ══════════════════════════════════════════════════════════════════════
 
+    // Internal error codes — used for fallback chain logic (NOT shown to users)
     private fun formatGeminiHttpError(code: Int): String = when (code) {
         400 -> "Bad request. Try rephrasing."
-        401 -> "GEMINI_KEY_INVALID"
-        403 -> "GEMINI_ACCESS_DENIED"
+        401 -> "GEMINI_KEY_INVALID"  // Internal code — triggers key fallback
+        403 -> "GEMINI_ACCESS_DENIED"  // Internal code — triggers key fallback
         404 -> "Gemini model not found."
         429 -> "Gemini rate limit. Wait a moment."
         500 -> "Gemini server error. Try again."
@@ -570,11 +650,26 @@ IMPORTANT: If you can't directly do something, provide helpful guidance. NEVER s
         else -> "Gemini error ($code)."
     }
 
+    // Internal exception errors — used for fallback logic (NOT shown to users)
     private fun formatExceptionError(e: Exception): String = when (e) {
         is java.net.UnknownHostException -> "No internet connection."
         is java.net.SocketTimeoutException -> "Request timed out."
         is java.net.ConnectException -> "Cannot connect to AI service."
         else -> "Connection error: ${e.message?.take(100) ?: "unknown"}"
+    }
+
+    /**
+     * Check if an error string indicates a failure that should fall back to web search.
+     * These are internal error codes, never shown to users.
+     */
+    private fun isFallbackError(error: String): Boolean {
+        return error.contains("KEY_INVALID") || error.contains("ACCESS_DENIED") ||
+               error.contains("ALL_GEMINI_KEYS_FAILED") || error.contains("ALL_GROK_MODELS_FAILED") ||
+               error.contains("NO_GEMINI_KEY") || error.contains("NO_GROK_KEY") ||
+               error.contains("internet connection") || error.contains("timed out") ||
+               error.contains("Cannot connect") || error.contains("Connection error") ||
+               error.contains("server error") || error.contains("unavailable") ||
+               error.contains("rate limit")
     }
 
     private fun cacheKey(message: String, context: List<ChatMessage>): String {
