@@ -91,6 +91,7 @@ data class DeviceUiState(
 data class SettingsUiState(
     val geminiKey: String = "",
     val isGeminiKeyValid: Boolean = false,
+    val grokKey: String = "",
     val porcupineKey: String = "",
     val weatherKey: String = "",
     val newsKey: String = "",
@@ -324,6 +325,7 @@ class MahiViewModel @Inject constructor(
         _settingsState.value = SettingsUiState(
             geminiKey = settingsManager.getGeminiApiKey(),
             isGeminiKeyValid = settingsManager.isGeminiKeyValid(),
+            grokKey = settingsManager.getGrokApiKey(),
             porcupineKey = settingsManager.getPorcupineKey(),
             weatherKey = settingsManager.getWeatherApiKey(),
             newsKey = settingsManager.getNewsApiKey(),
