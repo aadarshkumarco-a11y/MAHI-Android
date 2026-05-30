@@ -220,10 +220,10 @@ private fun ChatTopBar(
             }
         },
         actions = {
-            // Language toggle button
+            // Language toggle button — shows current language mode clearly
             TextButton(onClick = { viewModel.toggleLanguage() }) {
                 Text(
-                    text = if (currentLanguage == "en") "HI" else "EN",
+                    text = if (currentLanguage == "en") "EN" else "HI",
                     color = NeonCyan,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold

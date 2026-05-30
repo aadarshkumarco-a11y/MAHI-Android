@@ -26,10 +26,17 @@ class VoiceRecognitionEngine(
 ) {
 
     // Dynamic language — can be changed at runtime
-    var recognitionLanguage: String = "hi-IN,en-US"
+    // DEFAULT is now en-US (English primary) — user must explicitly select Hindi
+    var recognitionLanguage: String = "en-US"
         set(value) {
             field = value
             Log.d("VoiceRecognition", "Recognition language changed to: $value")
+            // Destroy and recreate recognizer with new language on next startListening()
+            try {
+                speechRecognizer?.destroy()
+            } catch (_: Exception) {}
+            speechRecognizer = null
+            isRecognizerInitialized = false
         }
 
     interface Callback {
@@ -146,8 +153,9 @@ class VoiceRecognitionEngine(
         val recognizerIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, recognitionLanguage)
-            // Also add as secondary language hint for better mixed-language recognition
+            // Language preference for the recognizer
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, recognitionLanguage)
+            // Do NOT restrict to only preferred language — allow mixed recognition
             putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, false)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)

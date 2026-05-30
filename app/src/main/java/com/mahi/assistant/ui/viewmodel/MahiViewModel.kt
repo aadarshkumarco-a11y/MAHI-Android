@@ -273,6 +273,11 @@ class MahiViewModel @Inject constructor(
             android.util.Log.e("MahiViewModel", "Failed to load settings", e)
         }
 
+        // CRITICAL FIX: Apply saved language to TTS/STT on startup
+        try { applyLanguageToEngines(_currentLanguage.value) } catch (e: Exception) {
+            android.util.Log.e("MahiViewModel", "Failed to apply language on startup", e)
+        }
+
         try {
             voiceRecognition.callback = object : VoiceRecognitionEngine.Callback {
                 override fun onResult(text: String) {
@@ -364,28 +369,49 @@ class MahiViewModel @Inject constructor(
     fun updateFloatingAssistant(enabled: Boolean) { settingsManager.setFloatingAssistant(enabled); _settingsState.value = _settingsState.value.copy(floatingAssistant = enabled) }
     fun updateDefaultCity(city: String) { settingsManager.setDefaultCity(city); _settingsState.value = _settingsState.value.copy(defaultCity = city) }
     fun updateContinuousMode(enabled: Boolean) { settingsManager.setContinuousMode(enabled); _continuousMode.value = enabled; _settingsState.value = _settingsState.value.copy(continuousMode = enabled) }
-    fun updateLanguage(lang: String) { settingsManager.setLanguage(lang); _currentLanguage.value = lang; _settingsState.value = _settingsState.value.copy(language = lang) }
+    fun updateLanguage(lang: String) {
+        settingsManager.setLanguage(lang)
+        _currentLanguage.value = lang
+        _settingsState.value = _settingsState.value.copy(language = lang)
+        // CRITICAL FIX: Also update TTS and STT languages (was missing before!)
+        applyLanguageToEngines(lang)
+    }
     fun toggleLanguage() {
         val newLang = if (_currentLanguage.value == "en") "hi" else "en"
         _currentLanguage.value = newLang
         settingsManager.setLanguage(newLang)
         _settingsState.value = _settingsState.value.copy(language = newLang)
-        // Update TTS language to match
+        applyLanguageToEngines(newLang)
+    }
+
+    /**
+     * CRITICAL FIX: Apply language to both TTS and SpeechRecognizer.
+     * English mode = en-US ONLY for STT (so English speech is written in English!)
+     * Hindi mode = hi-IN ONLY for STT (so Hindi speech is recognized properly)
+     * Both modes use appropriate TTS language.
+     */
+    private fun applyLanguageToEngines(lang: String) {
         try {
-            if (newLang == "hi") {
+            if (lang == "hi") {
+                // Hindi mode: TTS speaks Hindi, STT listens for Hindi
                 val hindiLocale = java.util.Locale("hi", "IN")
                 val result = ttsEngine.setLanguage(hindiLocale)
                 if (result == android.speech.tts.TextToSpeech.LANG_MISSING_DATA || result == android.speech.tts.TextToSpeech.LANG_NOT_SUPPORTED) {
+                    // Hindi TTS not available — use Indian English as fallback
                     ttsEngine.setLanguage(java.util.Locale("en", "IN"))
                 }
+                // STT: Hindi primary — this ensures Hindi speech is written as Hindi text
+                voiceRecognition.recognitionLanguage = "hi-IN"
             } else {
+                // English mode: TTS speaks English, STT listens for English
                 ttsEngine.setLanguage(java.util.Locale.US)
+                // STT: English ONLY — this ensures English speech is written as English text!
+                // NOT "en-US,hi-IN" because that causes English to be written in Hindi!
+                voiceRecognition.recognitionLanguage = "en-US"
             }
-        } catch (_: Exception) { }
-        // Update speech recognition language
-        try {
-            voiceRecognition.recognitionLanguage = if (newLang == "hi") "hi-IN,en-US" else "en-US,hi-IN"
-        } catch (_: Exception) { }
+        } catch (e: Exception) {
+            android.util.Log.e("MahiViewModel", "Failed to apply language to engines", e)
+        }
     }
     fun saveAllSettings() { _settingsState.value = _settingsState.value.copy(isSaved = true) }
 
@@ -2158,13 +2184,21 @@ class MahiViewModel @Inject constructor(
     private suspend fun fetchAiResponse(input: String): String {
         navigateTo("chat")
 
-        // Detect language for better response
-        val isHindi = com.mahi.assistant.api.WebSearchService.isHindiText(input)
-        val detectedLang = if (isHindi) "hi" else _currentLanguage.value
+        // Detect language for better response — PRIORITY: user's language toggle setting
+        val isHindiText = com.mahi.assistant.api.WebSearchService.isHindiText(input)
+        val currentLang = _currentLanguage.value
+        // If user typed/spoke Hindi Devanagari, always respond in Hinglish regardless of toggle
+        // If user typed English but toggle is Hindi, respond in Hinglish
+        // If user typed English and toggle is English, respond in English
+        val responseLang = when {
+            isHindiText -> "hi" // Hindi script detected → Hinglish response
+            currentLang == "hi" -> "hi" // Hindi mode → Hinglish response
+            else -> "en" // English mode → English response
+        }
 
         if (!aiEngine.isConfigured()) {
             // No AI key — use web search directly!
-            return tryWebSearch(input, detectedLang)
+            return tryWebSearch(input, responseLang)
         }
 
         // Try to extract and save user memory from this input
@@ -2190,32 +2224,36 @@ class MahiViewModel @Inject constructor(
                 )
             } else null
 
-            // Add language context hint for the AI
+            // CRITICAL FIX: Always add explicit language instruction to AI context
+            // This ensures AI ALWAYS responds in the correct language based on toggle
+            val langInstruction = when (responseLang) {
+                "hi" -> "[CRITICAL INSTRUCTION: You MUST respond in Hinglish (Hindi written in English/Roman script). " +
+                        "DO NOT use Devanagari script. DO NOT respond in pure English. " +
+                        "Write Hindi words in English letters. Example: 'Haan main aapki madad kar sakta hoon!' " +
+                        "'Aaj ka mausam accha hai.' 'Kya aap mujhe aur bata sakte hain?']"
+                else -> "[CRITICAL INSTRUCTION: You MUST respond in English. " +
+                        "Do NOT use Hindi, Hinglish, or Devanagari script. " +
+                        "Respond in clear, natural English.]"
+            }
             val langHint = com.mahi.assistant.ai.ChatMessage(
                 role = com.mahi.assistant.ai.ChatMessage.ROLE_MODEL,
-                content = if (isHindi) {
-                    "[System: User is speaking in Hindi/Devanagari. Respond in Hinglish (Hindi written in English script) naturally. Example: 'Haan main aapki madad kar sakta hoon.']"
-                } else if (detectedLang == "hi") {
-                    "[System: User prefers Hindi/Hinglish. Respond in Hinglish naturally.]"
-                } else {
-                    ""
-                },
+                content = langInstruction,
                 timestamp = 0L
             )
 
-            val fullHistory = listOfNotNull(langHint.takeIf { it.content.isNotBlank() }, contextPrefix) + history
+            val fullHistory = listOfNotNull(langHint, contextPrefix) + history
             val response = aiEngine.chatWithMemory(input, fullHistory)
             // If the response looks like an error, try web search
             if (response.contains("trouble connecting") || response.contains("check your internet") ||
                 response.contains("API key") || response.contains("having trouble") ||
                 response.contains("No AI backend") || response.contains("error") ||
                 response == "NO_AI_CONFIGURED" || response == "AI_BACKENDS_FAILED") {
-                tryWebSearch(input, detectedLang)
+                tryWebSearch(input, responseLang)
             } else {
                 response
             }
         } catch (e: Exception) {
-            tryWebSearch(input, detectedLang)
+            tryWebSearch(input, responseLang)
         }
     }
 
