@@ -338,6 +338,7 @@ class MahiViewModel @Inject constructor(
     }
 
     fun updateGeminiKey(key: String) { settingsManager.setGeminiApiKey(key); _settingsState.value = _settingsState.value.copy(geminiKey = key, isGeminiKeyValid = key.startsWith("AIza") && key.length >= 30, isSaved = false) }
+    fun updateGrokKey(key: String) { settingsManager.setGrokApiKey(key); _settingsState.value = _settingsState.value.copy(grokKey = key, isSaved = false) }
     fun updatePorcupineKey(key: String) { settingsManager.setPorcupineKey(key); _settingsState.value = _settingsState.value.copy(porcupineKey = key, isSaved = false) }
     fun updateWeatherKey(key: String) { settingsManager.setWeatherApiKey(key); _settingsState.value = _settingsState.value.copy(weatherKey = key, isSaved = false) }
     fun updateNewsKey(key: String) { settingsManager.setNewsApiKey(key); _settingsState.value = _settingsState.value.copy(newsKey = key, isSaved = false) }
@@ -385,7 +386,7 @@ class MahiViewModel @Inject constructor(
 
             // Update AI engine context with new messages
             try {
-                val recentMessages = _messages.value.takeLast(20).map {
+                val recentMessages = _messages.value.takeLast(50).map {
                     com.mahi.assistant.ai.ChatMessage(
                         role = if (it.role == MessageRole.USER) com.mahi.assistant.ai.ChatMessage.ROLE_USER else com.mahi.assistant.ai.ChatMessage.ROLE_MODEL,
                         content = it.content,
@@ -501,31 +502,68 @@ class MahiViewModel @Inject constructor(
 
         return try {
             // Try to resolve contact to phone number
-            val phoneNumber = if (contact.isNotBlank()) lookupContactPhoneNumber(contact) else null
+            val phoneNumber = if (contact.isNotBlank() && contact != "unknown") lookupContactPhoneNumber(contact) else null
 
             if (phoneNumber != null) {
-                // We have a phone number — use wa.me link with proper country code
+                // We have a phone number — use WhatsApp's native sharing intent
                 val cleanNumber = phoneNumber.replace(Regex("[^+\\d]"), "")
-                val formattedNumber = if (!cleanNumber.startsWith("+")) "+$cleanNumber" else cleanNumber
+                // Remove the + for wa.me URL
+                val waNumber = cleanNumber.replace("+", "")
 
                 if (message != null && message.isNotBlank()) {
-                    val intent = Intent(Intent.ACTION_VIEW).apply {
-                        data = Uri.parse("https://wa.me/${formattedNumber.replace("+", "")}?text=${URLEncoder.encode(message, "UTF-8")}")
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    // METHOD 1: Try WhatsApp direct share with phone number + text
+                    try {
+                        val intent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, message)
+                            // Try to set the phone number as extra for direct chat
+                            putExtra("jid", "${waNumber}@s.whatsapp.net")
+                            setPackage("com.whatsapp")
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        appContext.startActivity(intent)
+                        return "Sending WhatsApp message to $contact: $message"
+                    } catch (_: Exception) {
+                        // METHOD 2: Fallback to wa.me link
+                        try {
+                            val waIntent = Intent(Intent.ACTION_VIEW).apply {
+                                data = Uri.parse("https://wa.me/$waNumber?text=${URLEncoder.encode(message, "UTF-8")}")
+                                setPackage("com.whatsapp")
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            appContext.startActivity(waIntent)
+                            return "Opening WhatsApp chat with $contact. Message ready to send."
+                        } catch (_: Exception) {
+                            // METHOD 3: Browser fallback
+                            val webIntent = Intent(Intent.ACTION_VIEW).apply {
+                                data = Uri.parse("https://wa.me/$waNumber?text=${URLEncoder.encode(message, "UTF-8")}")
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            appContext.startActivity(webIntent)
+                            return "Opening WhatsApp web for $contact."
+                        }
                     }
-                    appContext.startActivity(intent)
-                    "Sending WhatsApp message to $contact: $message"
                 } else {
-                    val intent = Intent(Intent.ACTION_VIEW).apply {
-                        data = Uri.parse("https://wa.me/${formattedNumber.replace("+", "")}")
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    // No message — just open chat with contact
+                    try {
+                        val intent = Intent(Intent.ACTION_VIEW).apply {
+                            data = Uri.parse("https://wa.me/$waNumber")
+                            setPackage("com.whatsapp")
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        appContext.startActivity(intent)
+                        return "Opening WhatsApp chat with $contact."
+                    } catch (_: Exception) {
+                        val webIntent = Intent(Intent.ACTION_VIEW).apply {
+                            data = Uri.parse("https://wa.me/$waNumber")
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        appContext.startActivity(webIntent)
+                        return "Opening WhatsApp for $contact."
                     }
-                    appContext.startActivity(intent)
-                    "Opening WhatsApp chat with $contact."
                 }
             } else if (message != null && message.isNotBlank()) {
-                // No phone number found — use ACTION_SEND with WhatsApp package
-                // This lets the user pick the contact in WhatsApp itself
+                // No phone number found — use ACTION_SEND so user picks contact in WhatsApp
                 val intent = Intent(Intent.ACTION_SEND).apply {
                     type = "text/plain"
                     putExtra(Intent.EXTRA_TEXT, message)
@@ -540,21 +578,21 @@ class MahiViewModel @Inject constructor(
                 if (launchIntent != null) {
                     launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     appContext.startActivity(launchIntent)
-                    "Opening WhatsApp. I couldn't find $contact's number."
+                    "Opening WhatsApp. I couldn't find $contact's number in your contacts."
                 } else {
                     "WhatsApp is not installed on your device."
                 }
             }
         } catch (e: Exception) {
-            // Ultimate fallback: just open WhatsApp
+            // Ultimate fallback: try opening WhatsApp
             try {
                 val launchIntent = appContext.packageManager.getLaunchIntentForPackage("com.whatsapp")
                 if (launchIntent != null) {
                     launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     appContext.startActivity(launchIntent)
-                    "Opening WhatsApp. I couldn't find $contact's number."
+                    "Opening WhatsApp."
                 } else {
-                    "WhatsApp is not installed on your device."
+                    "WhatsApp is not installed. ${e.message}"
                 }
             } catch (_: Exception) {
                 "Couldn't open WhatsApp. ${e.message}"
@@ -563,22 +601,23 @@ class MahiViewModel @Inject constructor(
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    // CALL — with SIM Selection
+    // CALL — with SIM Selection + Fallback
     // ══════════════════════════════════════════════════════════════════════
 
     private fun launchCall(contact: String, simSlot: String): String {
-        if (contact.isBlank()) return "Who would you like me to call?"
+        if (contact.isBlank() || contact == "unknown") return "Who would you like me to call? Say a name or number."
 
         return try {
+            // First try to resolve contact name to phone number
             val phoneNumber = lookupContactPhoneNumber(contact)
 
             if (phoneNumber != null) {
+                // We have the phone number — make the call
                 val uri = Uri.parse("tel:$phoneNumber")
                 val callIntent = Intent(Intent.ACTION_CALL).apply {
                     data = uri
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-
-                    // SIM selection
+                    // SIM selection support
                     if (simSlot.isNotBlank()) {
                         val slotIndex = simSlot.toIntOrNull()?.minus(1) ?: 0
                         putExtra("com.android.phone.extra.slot", slotIndex)
@@ -590,18 +629,32 @@ class MahiViewModel @Inject constructor(
                 val simInfo = if (simSlot.isNotBlank()) " from SIM $simSlot" else ""
                 "Calling $contact$simInfo."
             } else {
-                // Contact not found — open dialer
-                val dialIntent = Intent(Intent.ACTION_DIAL).apply {
-                    data = Uri.parse("tel:${Uri.encode(contact)}")
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                // Check if the input is already a phone number
+                val isPhoneNumber = contact.matches(Regex("^[+]?[0-9\\s\\-()]{7,15}$"))
+                if (isPhoneNumber) {
+                    val uri = Uri.parse("tel:${contact.replace(Regex("[^+\\d]"), "")}")
+                    val callIntent = Intent(Intent.ACTION_CALL).apply {
+                        data = uri
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    appContext.startActivity(callIntent)
+                    "Calling $contact."
+                } else {
+                    // Not a number and not in contacts — open dialer
+                    val dialIntent = Intent(Intent.ACTION_DIAL).apply {
+                        data = Uri.parse("tel:${Uri.encode(contact)}")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    appContext.startActivity(dialIntent)
+                    "I couldn't find $contact in your contacts. Opening dialer."
                 }
-                appContext.startActivity(dialIntent)
-                "I couldn't find $contact in your contacts. Opening dialer."
             }
         } catch (e: SecurityException) {
+            // No CALL_PHONE permission — fall back to dialer
             try {
+                val number = lookupContactPhoneNumber(contact) ?: contact
                 val dialIntent = Intent(Intent.ACTION_DIAL).apply {
-                    data = Uri.parse("tel:${Uri.encode(contact)}")
+                    data = Uri.parse("tel:${Uri.encode(number)}")
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 appContext.startActivity(dialIntent)
@@ -610,13 +663,19 @@ class MahiViewModel @Inject constructor(
                 "I need phone permission to make calls. Please grant it in Settings."
             }
         } catch (e: Exception) {
-            "Couldn't call $contact. ${e.message}"
+            // Last resort — just open the dialer
+            try {
+                val dialIntent = Intent(Intent.ACTION_DIAL).apply {
+                    data = Uri.parse("tel:${Uri.encode(contact)}")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                appContext.startActivity(dialIntent)
+                "Opening dialer for $contact."
+            } catch (e2: Exception) {
+                "Couldn't call $contact. ${e.message}"
+            }
         }
     }
-
-    // ══════════════════════════════════════════════════════════════════════
-    // WEATHER — Open-Meteo (FREE, No API key!) + OWM fallback
-    // ══════════════════════════════════════════════════════════════════════
 
     private suspend fun fetchWeather(city: String): String {
         _weatherState.value = _weatherState.value.copy(isLoading = true)
@@ -1758,22 +1817,14 @@ class MahiViewModel @Inject constructor(
     private suspend fun fetchAiResponse(input: String): String {
         navigateTo("chat")
 
-        // Check if API key is configured before making any API call
-        if (!settingsManager.isGeminiKeyValid()) {
-            val keyHint = if (settingsManager.isGeminiKeySet()) {
-                "Your current API key appears to be invalid. Gemini API keys should start with 'AIza' and be at least 30 characters."
-            } else {
-                "No Gemini API key is configured."
-            }
-            return "I need a valid Gemini API key for AI chat. $keyHint " +
-                "Please go to Settings and enter your Gemini API key. " +
-                "You can get a free key from aistudio.google.com\n\n" +
-                "Note: Device commands like calling, SMS, flashlight, time, battery, weather, news, etc. still work without an API key!"
+        // Check if ANY AI backend is configured (Gemini OR Grok)
+        if (!aiEngine.isConfigured()) {
+            return "I need an AI API key to respond. Please go to Settings and enter your Gemini API key (free from aistudio.google.com) or your Grok API key.\n\nNote: Device commands like calling, SMS, flashlight, time, battery, weather, news, etc. still work without an API key!"
         }
 
         return try {
-            // Pass last 20 messages as context for memory
-            val history = _messages.value.takeLast(20).map {
+            // Pass last 50 messages as context for STRONG memory
+            val history = _messages.value.takeLast(50).map {
                 com.mahi.assistant.ai.ChatMessage(
                     role = if (it.role == MessageRole.USER) com.mahi.assistant.ai.ChatMessage.ROLE_USER else com.mahi.assistant.ai.ChatMessage.ROLE_MODEL,
                     content = it.content,
@@ -1782,14 +1833,13 @@ class MahiViewModel @Inject constructor(
             }
             aiEngine.chatWithMemory(input, history)
         } catch (e: Exception) {
-            // Check if the error is API-key related
             val errorMsg = e.message ?: ""
             if (errorMsg.contains("API key", ignoreCase = true) ||
                 errorMsg.contains("invalid", ignoreCase = true) ||
                 errorMsg.contains("401") || errorMsg.contains("403")) {
-                "I couldn't connect to Gemini. Your API key might be invalid. Please go to Settings and check your Gemini API key. Get a free key from aistudio.google.com"
+                "I couldn't connect to my AI backends. Please check your API keys in Settings."
             } else {
-                "I'm having trouble connecting. Please check your internet connection or your Gemini API key in Settings."
+                "I'm having trouble connecting. Please check your internet connection or API keys in Settings."
             }
         }
     }

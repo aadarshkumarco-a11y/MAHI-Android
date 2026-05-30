@@ -14,16 +14,22 @@ import retrofit2.converter.gson.GsonConverterFactory
 import com.google.gson.GsonBuilder
 
 /**
- * JARVIS-LEVEL AiConversationEngine — Strong Memory + Better AI + Resilience.
+ * JARVIS-LEVEL AiConversationEngine — DUAL AI Backend + Strong Memory.
  *
- * Handles:
- * - Multi-API key fallback chain (try multiple keys if one fails)
- * - Conversation history management with last 20 messages as context
- * - Enhanced system prompt (MAHI persona with multilingual support)
+ * AI Fallback Chain:
+ * 1. Gemini (primary) — try all model endpoints + all keys
+ * 2. Grok (xAI) — AUTOMATIC fallback when Gemini fails
+ *
+ * Memory System:
+ * - 50 messages context (up from 20)
+ * - Enhanced system prompt with memory awareness
+ * - Conversation history persisted in Room DB
+ * - Response caching (5 min TTL)
+ *
+ * Resilience:
  * - Retry with exponential backoff (1s, 2s, 4s)
- * - Response caching (same query = cached response for 5 mins)
- * - Automatic model fallback (gemini-2.0-flash → gemini-1.5-flash → gemini-pro)
- * - Dedicated classification method with its own low-temperature config
+ * - Multi-key fallback for Gemini
+ * - Automatic Grok fallback when ALL Gemini keys fail
  */
 class AiConversationEngine(
     private val settingsManager: SettingsManager
@@ -34,7 +40,7 @@ class AiConversationEngine(
     companion object {
         private const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta/"
 
-        // Models to try in order — newer/faster first
+        // Gemini model endpoints to try in order
         val MODEL_ENDPOINTS = listOf(
             "models/gemini-2.0-flash:generateContent",
             "models/gemini-1.5-flash:generateContent",
@@ -42,33 +48,57 @@ class AiConversationEngine(
             "models/gemini-pro:generateContent"
         )
 
-        // Maximum messages to pass as context
-        private const val MAX_CONTEXT_MESSAGES = 20
+        // Grok models to try in order
+        val GROK_MODELS = listOf(
+            "grok-3-mini",
+            "grok-3",
+            "grok-2"
+        )
+
+        // Maximum messages to pass as context — INCREASED for stronger memory
+        private const val MAX_CONTEXT_MESSAGES = 50
 
         // Cache TTL in milliseconds (5 minutes)
         private const val CACHE_TTL_MS = 5 * 60 * 1000L
 
         val SYSTEM_PROMPT = """
-            You are MAHI, an ultra-intelligent AI assistant inspired by Jarvis from Iron Man.
-            You are the most advanced personal AI assistant ever built.
+You are MAHI, an ultra-intelligent AI assistant inspired by Jarvis from Iron Man.
+You are the most advanced personal AI assistant ever built.
 
-            Core traits:
-            - Helpful, witty, and always ready to assist
-            - You respond in the SAME LANGUAGE the user speaks (Hindi, English, Hinglish, etc.)
-            - If they speak in Hindi/Hinglish, respond in Hindi/Hinglish
-            - If they speak in English, respond in English
-            - Keep responses concise but informative (2-3 sentences max for simple queries)
-            - You can control device features, search the web, play YouTube, read notifications, and more
-            - Always identify yourself as MAHI. Never break character
-            - When asked who you are, say you are MAHI, the most advanced personal AI assistant
-            - You speak in a confident, friendly tone with occasional wit
-            - You remember context from our conversation
-            - If a user asks you to do something you cannot directly perform, provide helpful guidance
-            - You are NOT just a chatbot — you are an ACTION assistant. When possible, confirm actions taken
-            - You understand Hindi, English, Hinglish, and other Indian languages naturally
+CORE TRAITS:
+- Helpful, witty, and always ready to assist
+- You respond in the SAME LANGUAGE the user speaks (Hindi, English, Hinglish, etc.)
+- If they speak in Hindi/Hinglish, respond in Hindi/Hinglish
+- If they speak in English, respond in English
+- Keep responses concise but informative (2-3 sentences for simple queries, more for complex ones)
+- You can control device features, search the web, play YouTube, read notifications, and more
+- Always identify yourself as MAHI. Never break character
+- When asked who you are, say you are MAHI, the most advanced personal AI assistant
+- You speak in a confident, friendly tone with occasional wit
+- You are NOT just a chatbot — you are an ACTION assistant
 
-            Memory context: You have access to the recent conversation history.
-            Use it to maintain continuity and reference previous messages.
+MEMORY SYSTEM — CRITICAL:
+- You have access to the FULL conversation history below
+- REMEMBER everything the user tells you — their name, preferences, past requests
+- If the user says "yaad rakhna" or "remember this", STORE it in your response
+- If the user asks about something discussed earlier, REFERENCE it accurately
+- Track the user's name, location, contacts, preferences across the conversation
+- When they say "mujhe apna naam batao" tell them their name if you know it
+- When they say "kya maine kal kuch kaha tha?" reference previous messages
+- NEVER say "I don't remember" if the information is in the conversation history
+- Build a mental model of the user across conversations
+
+LANGUAGE UNDERSTANDING:
+- You understand Hindi, English, Hinglish, and other Indian languages naturally
+- "kya hal hai" = "how are you", "aaj ka mausam" = "today's weather"
+- "call karo" = "make a call", "message bhejo" = "send message"
+- Understand partial words, slang, abbreviations, typos
+- "whatsapp pe msg karo" = send WhatsApp message
+- "yt pe video chalao" = play YouTube video
+- "flash on karo" = turn on flashlight
+- Always respond in the SAME language/style the user uses
+
+IMPORTANT: If a user asks you to do something you cannot directly perform, provide helpful guidance.
         """.trimIndent()
 
         // Classification-specific prompt — low temperature, structured output
@@ -84,6 +114,7 @@ class AiConversationEngine(
         .build()
 
     private val apiService: GeminiApiService = retrofit.create(GeminiApiService::class.java)
+    private val grokService: GrokApiService = GrokClient.apiService
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -96,224 +127,215 @@ class AiConversationEngine(
 
     // Remember which model worked last time to skip straight to it
     private var lastWorkingEndpoint: String? = null
+    private var lastWorkingGrokModel: String? = null
 
     // Response cache: query hash → (response, timestamp)
     private val responseCache = mutableMapOf<String, Pair<String, Long>>()
 
     /**
      * Retrieve the stored Gemini API key from SettingsManager.
-     * Supports multiple API keys as fallback chain (comma-separated).
      */
     private fun getApiKeys(): List<String> {
         val raw = settingsManager.getGeminiApiKey()
         if (raw.isBlank()) return emptyList()
-        // Support comma-separated keys for fallback
         return raw.split(",").map { it.trim() }.filter { it.isNotBlank() }
     }
 
-    /**
-     * Get the primary API key (first one in the chain).
-     */
-    private fun getApiKey(): String {
-        return getApiKeys().firstOrNull() ?: ""
-    }
+    private fun getApiKey(): String = getApiKeys().firstOrNull() ?: ""
+
+    private fun getGrokApiKey(): String = settingsManager.getGrokApiKey()
 
     /**
-     * Check if the AI engine is properly configured with a valid API key.
-     * Valid Gemini keys start with "AIza" and are at least 30 characters.
+     * Check if ANY AI backend is configured (Gemini OR Grok).
      */
-    fun isConfigured(): Boolean {
+    fun isConfigured(): Boolean = isGeminiConfigured() || isGrokConfigured()
+
+    fun isGeminiConfigured(): Boolean {
         val key = getApiKey()
         return key.isNotBlank() && key.startsWith("AIza") && key.length >= 30
     }
 
-    /**
-     * Check if any API key is set (even if format might be invalid).
-     */
-    fun isKeySet(): Boolean {
-        return getApiKey().isNotBlank()
-    }
+    fun isGrokConfigured(): Boolean = getGrokApiKey().isNotBlank()
 
-    /**
-     * Clear the conversation history.
-     */
-    fun clearHistory() {
-        _conversationHistory.value = emptyList()
-    }
+    fun isKeySet(): Boolean = getApiKey().isNotBlank() || getGrokApiKey().isNotBlank()
 
-    /**
-     * Add a message to the conversation history without sending it to the API.
-     */
+    fun clearHistory() { _conversationHistory.value = emptyList() }
+
     fun addToHistory(message: ChatMessage) {
         val current = _conversationHistory.value.toMutableList()
         current.add(message)
         _conversationHistory.value = current
     }
 
-    /**
-     * Load conversation context from external source (e.g., Room DB).
-     * Takes the last MAX_CONTEXT_MESSAGES messages.
-     */
     fun loadContext(messages: List<ChatMessage>) {
         _conversationHistory.value = messages.takeLast(MAX_CONTEXT_MESSAGES)
     }
 
-    /**
-     * Try calling the Gemini API with multiple model endpoints AND multiple API keys as fallback.
-     * Returns the response text on success, or null if all endpoints fail.
-     */
+    // ══════════════════════════════════════════════════════════════════════
+    // GEMINI API — Primary Backend
+    // ══════════════════════════════════════════════════════════════════════
+
     private suspend fun callGeminiApi(
         apiKey: String,
         request: GeminiRequest
     ): Pair<GeminiResponse?, String?> {
-        // Try the last working endpoint first
         val endpoints = mutableListOf<String>()
         lastWorkingEndpoint?.let { endpoints.add(it) }
-        MODEL_ENDPOINTS.forEach { ep ->
-            if (ep !in endpoints) endpoints.add(ep)
-        }
+        MODEL_ENDPOINTS.forEach { ep -> if (ep !in endpoints) endpoints.add(ep) }
 
         var lastErrorCode: Int? = null
-        var lastErrorMsg: String? = null
 
         for (endpoint in endpoints) {
             try {
                 val response = apiService.generateContent(endpoint, apiKey, request)
-                lastWorkingEndpoint = endpoint // Remember what worked
+                lastWorkingEndpoint = endpoint
                 return Pair(response, null)
             } catch (e: HttpException) {
                 lastErrorCode = e.code()
-                lastErrorMsg = e.message()
-                // If it's a 404, try the next model endpoint
                 if (e.code() == 404) continue
-                // For 401/403, the key is invalid — return error immediately so we try next key
                 if (e.code() == 401 || e.code() == 403) {
-                    return Pair(null, formatHttpError(e.code(), e.message()))
+                    return Pair(null, formatGeminiHttpError(e.code()))
                 }
-                // For other errors (429, 500), don't bother trying other models
-                return Pair(null, formatHttpError(e.code(), e.message()))
+                return Pair(null, formatGeminiHttpError(e.code()))
             } catch (e: Exception) {
-                lastErrorMsg = e.message
-                // Non-HTTP error — probably network issue, no point trying other models
                 return Pair(null, formatExceptionError(e))
             }
         }
-
-        // All model endpoints returned 404
-        return Pair(null, "Gemini AI is currently unavailable. Your API key might be invalid or the service might be down. Please check your Gemini API key in Settings. (Error: ${lastErrorCode ?: "unknown"})")
+        return Pair(null, "Gemini unavailable (Error: ${lastErrorCode ?: "unknown"})")
     }
 
-    /**
-     * Call Gemini with ALL API keys as fallback chain.
-     * Tries each key with each model endpoint.
-     */
     private suspend fun callGeminiWithKeyFallback(request: GeminiRequest): Pair<GeminiResponse?, String?> {
         val apiKeys = getApiKeys()
-
-        if (apiKeys.isEmpty()) {
-            return Pair(null, "Gemini API key not configured. Please go to Settings and enter your API key. Get a free key from aistudio.google.com")
-        }
+        if (apiKeys.isEmpty()) return Pair(null, "NO_GEMINI_KEY")
 
         for (apiKey in apiKeys) {
             val (response, error) = callGeminiApi(apiKey, request)
             if (response != null) return Pair(response, null)
-            // If this key got 401/403, try the next key
             if (error != null && (error.contains("invalid") || error.contains("denied") || error.contains("401") || error.contains("403"))) {
-                continue
+                continue // Try next key
             }
-            // For other errors, return immediately
             if (error != null) return Pair(null, error)
         }
-
-        return Pair(null, "All Gemini API keys failed. Please check your API keys in Settings. Keys should start with 'AIza'. Get a free key from aistudio.google.com")
+        return Pair(null, "ALL_GEMINI_KEYS_FAILED")
     }
 
-    private fun formatHttpError(code: Int, message: String?): String {
-        return when (code) {
-            400 -> "Bad request to Gemini API. Please try rephrasing your question."
-            401 -> "Your Gemini API key appears to be invalid. Please update it in Settings. Keys should start with 'AIza'."
-            403 -> "Access to Gemini API denied. Please check your API key permissions in Google AI Studio."
-            404 -> "The Gemini model endpoint was not found. This might mean your API key is invalid."
-            429 -> "Gemini API rate limit reached. Please wait a moment and try again."
-            500 -> "Gemini server error. Please try again in a few seconds."
-            503 -> "Gemini service is temporarily unavailable. Please try again later."
-            else -> "Connection error ($code). Please check your internet and try again."
-        }
-    }
-
-    private fun formatExceptionError(e: Exception): String {
-        val msg = e.message ?: ""
-        return when {
-            msg.contains("401") || msg.contains("403") ->
-                "Your Gemini API key was rejected. Please update it in Settings. Keys should start with 'AIza'. Get a free key from aistudio.google.com"
-            msg.contains("invalid", ignoreCase = true) ->
-                "Your Gemini API key appears to be invalid. Please update it in Settings."
-            e is java.net.UnknownHostException -> "No internet connection. Please check your network."
-            e is java.net.SocketTimeoutException -> "Request timed out. Please try again."
-            e is java.net.ConnectException -> "Cannot connect to Gemini. Please check your internet."
-            else -> "Connection error. If this persists, check your Gemini API key in Settings."
-        }
-    }
+    // ══════════════════════════════════════════════════════════════════════
+    // GROK (xAI) — AUTOMATIC FALLBACK Backend
+    // ══════════════════════════════════════════════════════════════════════
 
     /**
-     * Generate a simple hash for caching purposes.
+     * Call Grok API as fallback when Gemini fails.
+     * Uses OpenAI-compatible chat completions format.
      */
-    private fun cacheKey(message: String, context: List<ChatMessage>): String {
-        // Use last 5 messages + current message as cache key
-        val contextStr = context.takeLast(5).joinToString("|") { "${it.role}:${it.content}" }
-        return "$contextStr|$message"
-    }
+    private suspend fun callGrokApi(
+        messages: List<GrokMessage>,
+        model: String = "grok-3-mini",
+        temperature: Double = 0.7,
+        maxTokens: Int = 1024
+    ): Pair<String?, String?> {
+        val grokKey = getGrokApiKey()
+        if (grokKey.isBlank()) return Pair(null, "NO_GROK_KEY")
 
-    /**
-     * Check if we have a cached response for this query.
-     */
-    private fun getCachedResponse(key: String): String? {
-        val cached = responseCache[key] ?: return null
-        if (System.currentTimeMillis() - cached.second > CACHE_TTL_MS) {
-            responseCache.remove(key)
-            return null
-        }
-        return cached.first
-    }
+        // Try models in order, starting with last working
+        val models = mutableListOf<String>()
+        lastWorkingGrokModel?.let { models.add(it) }
+        GROK_MODELS.forEach { m -> if (m !in models) models.add(m) }
 
-    /**
-     * Cache a response.
-     */
-    private fun cacheResponse(key: String, response: String) {
-        // Keep cache size manageable
-        if (responseCache.size > 50) {
-            val oldest = responseCache.minByOrNull { it.value.second }?.key
-            oldest?.let { responseCache.remove(it) }
-        }
-        responseCache[key] = Pair(response, System.currentTimeMillis())
-    }
-
-    /**
-     * Retry with exponential backoff.
-     */
-    private suspend fun <T> retryWithBackoff(
-        maxRetries: Int = 3,
-        initialDelayMs: Long = 1000L,
-        block: suspend () -> T
-    ): T {
-        var lastException: Exception? = null
-        repeat(maxRetries) { attempt ->
+        for (tryModel in models) {
             try {
-                return block()
-            } catch (e: Exception) {
-                lastException = e
-                if (attempt < maxRetries - 1) {
-                    val delayMs = initialDelayMs * (1L shl attempt) // 1s, 2s, 4s
-                    delay(delayMs)
+                val request = GrokRequest(
+                    model = tryModel,
+                    messages = messages,
+                    temperature = temperature,
+                    max_tokens = maxTokens
+                )
+                val response = grokService.chatCompletions("Bearer $grokKey", request)
+                lastWorkingGrokModel = tryModel
+                val text = response.extractText()
+                return if (text.isNullOrBlank()) Pair(null, "Grok returned empty response") else Pair(text, null)
+            } catch (e: HttpException) {
+                if (e.code() == 404) continue // Try next model
+                if (e.code() == 401 || e.code() == 403) {
+                    return Pair(null, "Grok API key rejected (${e.code()})")
                 }
+                return Pair(null, "Grok error (${e.code()})")
+            } catch (e: Exception) {
+                return Pair(null, formatExceptionError(e))
             }
         }
-        throw lastException ?: Exception("Unknown error during retry")
+        return Pair(null, "ALL_GROK_MODELS_FAILED")
     }
 
     /**
-     * Send a user message to the Gemini API and return the model's text response.
-     * Includes conversation history context (last 20 messages).
+     * Convert ChatMessage list to Grok message format.
+     */
+    private fun List<ChatMessage>.toGrokMessages(systemPrompt: String): List<GrokMessage> {
+        val result = mutableListOf(GrokMessage(role = "system", content = systemPrompt))
+        for (msg in this) {
+            val role = when (msg.role) {
+                ChatMessage.ROLE_USER -> "user"
+                ChatMessage.ROLE_MODEL -> "assistant"
+                else -> "user"
+            }
+            result.add(GrokMessage(role = role, content = msg.content))
+        }
+        return result
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // DUAL-BACKEND CALL — Gemini → Grok Auto-Fallback
+    // ══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Try Gemini first, then automatically fall back to Grok if Gemini fails.
+     * This is the CORE method that ensures MAHI always responds.
+     */
+    private suspend fun callWithDualFallback(
+        geminiRequest: GeminiRequest,
+        chatMessages: List<ChatMessage>,
+        systemPrompt: String = SYSTEM_PROMPT,
+        temperature: Double = 0.7,
+        maxTokens: Int = 1024
+    ): String {
+        // ── TRY GEMINI FIRST ──────────────────────────────────
+        if (isGeminiConfigured()) {
+            val (response, geminiError) = callGeminiWithKeyFallback(geminiRequest)
+            if (response != null) {
+                val text = response.extractText()
+                if (!text.isNullOrBlank()) return text
+            }
+            // Gemini failed — log and try Grok
+            _lastError.value = "Gemini failed: $geminiError — trying Grok fallback..."
+        }
+
+        // ── GROK FALLBACK ─────────────────────────────────────
+        if (isGrokConfigured()) {
+            val grokMessages = chatMessages.toGrokMessages(systemPrompt)
+            val (grokText, grokError) = callGrokApi(
+                messages = grokMessages,
+                temperature = temperature,
+                maxTokens = maxTokens
+            )
+            if (grokText != null) return grokText
+
+            _lastError.value = "Both AI backends failed. Gemini error + Grok: $grokError"
+        }
+
+        // ── BOTH FAILED ───────────────────────────────────────
+        return if (!isGeminiConfigured() && !isGrokConfigured()) {
+            "No AI backend configured. Please set your Gemini API key or Grok API key in Settings."
+        } else {
+            "I'm having trouble connecting to my AI backends. Please check your internet connection or API keys in Settings."
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // PUBLIC METHODS
+    // ══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Send a user message with full conversation memory.
+     * Uses Gemini first, then Grok as automatic fallback.
      */
     suspend fun sendMessage(
         message: String,
@@ -323,21 +345,6 @@ class AiConversationEngine(
         _lastError.value = null
 
         try {
-            val apiKey = getApiKey()
-            if (apiKey.isBlank()) {
-                val errorMsg = "I need a valid Gemini API key to respond. Please go to Settings and enter your Gemini API key. You can get a free key from aistudio.google.com"
-                _lastError.value = errorMsg
-                _isLoading.value = false
-                return errorMsg
-            }
-            if (!apiKey.startsWith("AIza") || apiKey.length < 30) {
-                val errorMsg = "Your Gemini API key appears to be invalid (keys should start with 'AIza' and be at least 30 characters). Please update it in Settings. Get a free key from aistudio.google.com"
-                _lastError.value = errorMsg
-                _isLoading.value = false
-                return errorMsg
-            }
-
-            // Build the user message and add to history
             val userMessage = ChatMessage(role = ChatMessage.ROLE_USER, content = message)
             val updatedHistory = history.takeLast(MAX_CONTEXT_MESSAGES) + userMessage
             _conversationHistory.value = updatedHistory
@@ -352,58 +359,19 @@ class AiConversationEngine(
                 return cached
             }
 
-            // Build the request with conversation context
+            // Build Gemini request with conversation context
             val contents = updatedHistory.toContents()
+            val systemInstruction = SystemInstruction(parts = listOf(Part(text = SYSTEM_PROMPT)))
+            val generationConfig = GenerationConfig(temperature = 0.7f, topP = 0.95f, topK = 40, maxOutputTokens = 1024)
+            val request = GeminiRequest(contents = contents, systemInstruction = systemInstruction, generationConfig = generationConfig)
 
-            val systemInstruction = SystemInstruction(
-                parts = listOf(Part(text = SYSTEM_PROMPT))
-            )
-
-            val generationConfig = GenerationConfig(
-                temperature = 0.7f,
-                topP = 0.95f,
-                topK = 40,
-                maxOutputTokens = 1024
-            )
-
-            val request = GeminiRequest(
-                contents = contents,
-                systemInstruction = systemInstruction,
-                generationConfig = generationConfig
-            )
-
-            // Make the API call with retry + key fallback
-            val responseText = retryWithBackoff(maxRetries = 3, initialDelayMs = 1000L) {
-                val (response, error) = callGeminiWithKeyFallback(request)
-
-                if (error != null) {
-                    _lastError.value = error
-                    throw Exception(error)
-                }
-
-                if (response == null) {
-                    throw Exception("No response from Gemini")
-                }
-
-                val text = response.extractText()
-
-                if (text.isNullOrBlank()) {
-                    val blockReason = response.promptFeedback?.blockReason
-                    val finishReason = response.candidates?.firstOrNull()?.finishReason
-                    throw Exception(when {
-                        blockReason != null -> "Response blocked: $blockReason"
-                        finishReason == "SAFETY" -> "Response blocked by safety filters"
-                        else -> "No response generated"
-                    })
-                }
-
-                text
+            // Try Gemini → Grok fallback
+            val responseText = retryWithBackoff(maxRetries = 2, initialDelayMs = 1000L) {
+                callWithDualFallback(request, updatedHistory)
             }
 
-            // Cache the response
+            // Cache and store
             cacheResponse(key, responseText)
-
-            // Add the model's response to history
             val modelMessage = ChatMessage(role = ChatMessage.ROLE_MODEL, content = responseText)
             _conversationHistory.value = updatedHistory + modelMessage
 
@@ -411,120 +379,59 @@ class AiConversationEngine(
             return responseText
 
         } catch (e: Exception) {
-            val errorMsg = when {
-                e.message?.contains("401") == true || e.message?.contains("403") == true ->
-                    "Your Gemini API key was rejected. Please go to Settings and enter a valid key. Get a free key from aistudio.google.com"
-                e.message?.contains("invalid", ignoreCase = true) == true ->
-                    "Your Gemini API key appears to be invalid. Please update it in Settings. Get a free key from aistudio.google.com"
-                e is java.net.UnknownHostException -> "No internet connection. Please check your network."
-                e is java.net.SocketTimeoutException -> "Request timed out. Please try again."
-                e is java.net.ConnectException -> "Cannot connect to Gemini. Please check your internet."
-                e.message?.contains("API key", ignoreCase = true) == true -> e.message ?: "API key error. Please check Settings."
-                else -> "I'm having trouble connecting. Please check your Gemini API key in Settings, or verify your internet connection."
-            }
-            _lastError.value = errorMsg
+            _lastError.value = formatExceptionError(e)
             _isLoading.value = false
-            return errorMsg
+            return formatExceptionError(e)
         }
     }
 
     /**
-     * Dedicated method for intent classification.
-     * Uses low temperature and the classification system prompt for structured JSON output.
-     * Does NOT add to conversation history or cache.
+     * Classify intent using AI — Gemini first, then Grok fallback.
      */
     suspend fun classifyIntent(prompt: String): String {
-        val apiKey = getApiKey()
-        if (apiKey.isBlank()) {
-            return "API key not configured. Please set your Gemini API key in Settings."
-        }
-        if (!apiKey.startsWith("AIza") || apiKey.length < 30) {
-            return "API key invalid. Please enter a valid Gemini API key in Settings."
-        }
-
         _isLoading.value = true
 
-        return try {
-            val contents = listOf(
-                Content(
-                    role = ChatMessage.ROLE_USER,
-                    parts = listOf(Part(text = prompt))
+        // Try Gemini first
+        if (isGeminiConfigured()) {
+            try {
+                val contents = listOf(Content(role = ChatMessage.ROLE_USER, parts = listOf(Part(text = prompt))))
+                val request = GeminiRequest(
+                    contents = contents,
+                    systemInstruction = SystemInstruction(parts = listOf(Part(text = CLASSIFICATION_SYSTEM_PROMPT))),
+                    generationConfig = GenerationConfig(temperature = 0.1f, topP = 0.8f, maxOutputTokens = 200)
                 )
-            )
-
-            val request = GeminiRequest(
-                contents = contents,
-                systemInstruction = SystemInstruction(
-                    parts = listOf(Part(text = CLASSIFICATION_SYSTEM_PROMPT))
-                ),
-                generationConfig = GenerationConfig(
-                    temperature = 0.1f,  // Very low temperature for classification
-                    topP = 0.8f,
-                    maxOutputTokens = 200  // Short output for JSON
-                )
-            )
-
-            val (response, error) = callGeminiWithKeyFallback(request)
-
-            _isLoading.value = false
-            if (error != null) return error
-            return response?.extractText() ?: "No response generated."
-
-        } catch (e: Exception) {
-            _isLoading.value = false
-            formatExceptionError(e)
+                val (response, error) = callGeminiWithKeyFallback(request)
+                if (response != null) {
+                    val text = response.extractText()
+                    if (!text.isNullOrBlank()) {
+                        _isLoading.value = false
+                        return text
+                    }
+                }
+            } catch (_: Exception) { }
         }
+
+        // Grok fallback for classification
+        if (isGrokConfigured()) {
+            try {
+                val grokMessages = listOf(
+                    GrokMessage(role = "system", content = CLASSIFICATION_SYSTEM_PROMPT),
+                    GrokMessage(role = "user", content = prompt)
+                )
+                val (text, _) = callGrokApi(messages = grokMessages, temperature = 0.1, maxTokens = 200)
+                if (text != null) {
+                    _isLoading.value = false
+                    return text
+                }
+            } catch (_: Exception) { }
+        }
+
+        _isLoading.value = false
+        return "CLASSIFICATION_FAILED"
     }
 
     /**
-     * Send a single message without maintaining conversation history.
-     * Useful for quick one-off queries.
-     */
-    suspend fun queryOnce(message: String): String {
-        val apiKey = getApiKey()
-        if (apiKey.isBlank()) {
-            return "API key not configured. Please set your Gemini API key in Settings."
-        }
-        if (!apiKey.startsWith("AIza") || apiKey.length < 30) {
-            return "API key invalid. Please enter a valid Gemini API key in Settings."
-        }
-
-        _isLoading.value = true
-
-        return try {
-            val contents = listOf(
-                Content(
-                    role = ChatMessage.ROLE_USER,
-                    parts = listOf(Part(text = message))
-                )
-            )
-
-            val request = GeminiRequest(
-                contents = contents,
-                systemInstruction = SystemInstruction(
-                    parts = listOf(Part(text = SYSTEM_PROMPT))
-                ),
-                generationConfig = GenerationConfig(
-                    temperature = 0.3f,
-                    maxOutputTokens = 256
-                )
-            )
-
-            val (response, error) = callGeminiWithKeyFallback(request)
-
-            _isLoading.value = false
-            if (error != null) return error
-            return response?.extractText() ?: "No response generated."
-
-        } catch (e: Exception) {
-            _isLoading.value = false
-            formatExceptionError(e)
-        }
-    }
-
-    /**
-     * Get a conversational AI response with full context memory.
-     * This is the main method for GENERAL_CHAT intents.
+     * Chat with full memory context — Gemini → Grok fallback.
      */
     suspend fun chatWithMemory(
         message: String,
@@ -534,72 +441,133 @@ class AiConversationEngine(
         _lastError.value = null
 
         try {
-            val apiKeys = getApiKeys()
-            if (apiKeys.isEmpty()) {
-                val errorMsg = "I need a valid Gemini API key to respond. Please go to Settings and enter your Gemini API key. You can get a free key from aistudio.google.com"
-                _lastError.value = errorMsg
-                _isLoading.value = false
-                return errorMsg
-            }
-            // Validate key format before making API call
-            val primary = apiKeys.first()
-            if (!primary.startsWith("AIza") || primary.length < 30) {
-                val errorMsg = "Your Gemini API key appears to be invalid (should start with 'AIza'). Please update it in Settings. Get a free key from aistudio.google.com"
-                _lastError.value = errorMsg
-                _isLoading.value = false
-                return errorMsg
-            }
-
-            // Build with conversation context (last 20 messages)
             val contextMessages = conversationContext.takeLast(MAX_CONTEXT_MESSAGES)
             val userMessage = ChatMessage(role = ChatMessage.ROLE_USER, content = message)
             val allMessages = contextMessages + userMessage
 
+            // Build Gemini request
             val contents = allMessages.toContents()
+            val systemInstruction = SystemInstruction(parts = listOf(Part(text = SYSTEM_PROMPT)))
+            val generationConfig = GenerationConfig(temperature = 0.7f, topP = 0.95f, topK = 40, maxOutputTokens = 1024)
+            val request = GeminiRequest(contents = contents, systemInstruction = systemInstruction, generationConfig = generationConfig)
 
-            val systemInstruction = SystemInstruction(
-                parts = listOf(Part(text = SYSTEM_PROMPT))
-            )
-
-            val generationConfig = GenerationConfig(
-                temperature = 0.7f,
-                topP = 0.95f,
-                topK = 40,
-                maxOutputTokens = 1024
-            )
-
-            val request = GeminiRequest(
-                contents = contents,
-                systemInstruction = systemInstruction,
-                generationConfig = generationConfig
-            )
-
+            // Try Gemini → Grok fallback with retry
             val responseText = retryWithBackoff(maxRetries = 2, initialDelayMs = 1000L) {
-                val (response, error) = callGeminiWithKeyFallback(request)
-                if (error != null) throw Exception(error)
-                if (response == null) throw Exception("No response")
-                val text = response.extractText()
-                if (text.isNullOrBlank()) throw Exception("Empty response")
-                text
+                callWithDualFallback(request, allMessages)
             }
 
             _isLoading.value = false
             return responseText
 
         } catch (e: Exception) {
-            val errorMsg = when {
-                e.message?.contains("401") == true || e.message?.contains("403") == true ->
-                    "Your Gemini API key was rejected. Please go to Settings and enter a valid key. Get a free key from aistudio.google.com"
-                e.message?.contains("invalid", ignoreCase = true) == true ->
-                    "Your Gemini API key appears to be invalid. Please update it in Settings. Get a free key from aistudio.google.com"
-                e is java.net.UnknownHostException -> "No internet connection. Please check your network."
-                e is java.net.SocketTimeoutException -> "Request timed out. Please try again."
-                e.message?.contains("API key", ignoreCase = true) == true -> e.message ?: "API key error. Please check your Gemini API key in Settings."
-                else -> "I'm having trouble connecting. This might be an API key issue — please check your Gemini API key in Settings, or check your internet connection."
-            }
+            val errorMsg = formatExceptionError(e)
             _lastError.value = errorMsg
             _isLoading.value = false
             return errorMsg
         }
+    }
+
+    /**
+     * Quick one-off query — no history maintained.
+     */
+    suspend fun queryOnce(message: String): String {
+        _isLoading.value = true
+
+        try {
+            // Gemini attempt
+            if (isGeminiConfigured()) {
+                val contents = listOf(Content(role = ChatMessage.ROLE_USER, parts = listOf(Part(text = message))))
+                val request = GeminiRequest(
+                    contents = contents,
+                    systemInstruction = SystemInstruction(parts = listOf(Part(text = SYSTEM_PROMPT))),
+                    generationConfig = GenerationConfig(temperature = 0.3f, maxOutputTokens = 256)
+                )
+                val (response, _) = callGeminiWithKeyFallback(request)
+                if (response != null) {
+                    val text = response.extractText()
+                    if (!text.isNullOrBlank()) { _isLoading.value = false; return text }
+                }
+            }
+
+            // Grok fallback
+            if (isGrokConfigured()) {
+                val grokMessages = listOf(
+                    GrokMessage(role = "system", content = SYSTEM_PROMPT),
+                    GrokMessage(role = "user", content = message)
+                )
+                val (text, _) = callGrokApi(messages = grokMessages, temperature = 0.3, maxTokens = 256)
+                if (text != null) { _isLoading.value = false; return text }
+            }
+
+            _isLoading.value = false
+            return "No AI backend available. Please configure an API key in Settings."
+
+        } catch (e: Exception) {
+            _isLoading.value = false
+            return formatExceptionError(e)
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // HELPERS
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun formatGeminiHttpError(code: Int): String = when (code) {
+        400 -> "Bad request. Try rephrasing."
+        401 -> "GEMINI_KEY_INVALID"
+        403 -> "GEMINI_ACCESS_DENIED"
+        404 -> "Gemini model not found."
+        429 -> "Gemini rate limit. Wait a moment."
+        500 -> "Gemini server error. Try again."
+        503 -> "Gemini unavailable. Try again later."
+        else -> "Gemini error ($code)."
+    }
+
+    private fun formatExceptionError(e: Exception): String = when (e) {
+        is java.net.UnknownHostException -> "No internet connection."
+        is java.net.SocketTimeoutException -> "Request timed out."
+        is java.net.ConnectException -> "Cannot connect to AI service."
+        else -> "Connection error: ${e.message?.take(100) ?: "unknown"}"
+    }
+
+    private fun cacheKey(message: String, context: List<ChatMessage>): String {
+        val contextStr = context.takeLast(5).joinToString("|") { "${it.role}:${it.content}" }
+        return "$contextStr|$message"
+    }
+
+    private fun getCachedResponse(key: String): String? {
+        val cached = responseCache[key] ?: return null
+        if (System.currentTimeMillis() - cached.second > CACHE_TTL_MS) {
+            responseCache.remove(key)
+            return null
+        }
+        return cached.first
+    }
+
+    private fun cacheResponse(key: String, response: String) {
+        if (responseCache.size > 50) {
+            val oldest = responseCache.minByOrNull { it.value.second }?.key
+            oldest?.let { responseCache.remove(it) }
+        }
+        responseCache[key] = Pair(response, System.currentTimeMillis())
+    }
+
+    private suspend fun <T> retryWithBackoff(
+        maxRetries: Int = 3,
+        initialDelayMs: Long = 1000L,
+        block: suspend () -> T
+    ): T {
+        var lastException: Exception? = null
+        repeat(maxRetries) { attempt ->
+            try {
+                return block()
+            } catch (e: Exception) {
+                lastException = e
+                if (attempt < maxRetries - 1) {
+                    delay(initialDelayMs * (1L shl attempt))
+                }
+            }
+        }
+        throw lastException ?: Exception("Unknown error during retry")
     }
 }

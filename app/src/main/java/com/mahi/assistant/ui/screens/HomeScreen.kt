@@ -89,7 +89,7 @@ fun HomeScreen(
             )
 
             // ── API Key Warning Banner ───────────────────────────
-            if (!settingsState.isGeminiKeyValid) {
+            if (!settingsState.isGeminiKeyValid && settingsState.grokKey.isBlank()) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
@@ -389,6 +389,7 @@ private fun StatusIndicators(isAiConfigured: Boolean = false) {
     ) {
         StatusDot(label = "Voice Ready", color = NeonGreen)
         StatusDot(label = if (isAiConfigured) "AI Online" else "AI Offline", color = if (isAiConfigured) NeonCyan else Amber)
+        StatusDot(label = if (isAiConfigured) "Gemini+Grok" else "No AI Key", color = if (isAiConfigured) NeonGreen else Amber)
         StatusDot(label = "Device Control", color = ElectricPurple)
     }
 }

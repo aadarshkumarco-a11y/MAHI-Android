@@ -40,10 +40,12 @@ fun SettingsScreen(
 
     // Local state for editing - initialized from persisted settings
     var geminiKey by remember(settingsState.geminiKey) { mutableStateOf(settingsState.geminiKey) }
+    var grokKey by remember(settingsState.grokKey) { mutableStateOf(settingsState.grokKey) }
     var porcupineKey by remember(settingsState.porcupineKey) { mutableStateOf(settingsState.porcupineKey) }
     var weatherKey by remember(settingsState.weatherKey) { mutableStateOf(settingsState.weatherKey) }
     var newsKey by remember(settingsState.newsKey) { mutableStateOf(settingsState.newsKey) }
     var showGeminiKey by remember { mutableStateOf(false) }
+    var showGrokKey by remember { mutableStateOf(false) }
     var showPorcupineKey by remember { mutableStateOf(false) }
     var showWeatherKey by remember { mutableStateOf(false) }
     var showNewsKey by remember { mutableStateOf(false) }
@@ -113,6 +115,23 @@ fun SettingsScreen(
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         ApiKeyField(
+                            label = "Grok (xAI) API Key",
+                            value = grokKey,
+                            onValueChange = {
+                                grokKey = it
+                                viewModel.updateGrokKey(it)
+                            },
+                            showKey = showGrokKey,
+                            onToggleVisibility = { showGrokKey = !showGrokKey },
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "Grok is used as automatic fallback when Gemini is unavailable",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextSecondary,
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        ApiKeyField(
                             label = "Porcupine Access Key",
                             value = porcupineKey,
                             onValueChange = {
@@ -164,9 +183,9 @@ fun SettingsScreen(
 
                         // Status indicator
                         val missingKeys = buildList {
-                            if (geminiKey.isBlank()) add("Gemini")
-                            if (weatherKey.isBlank()) add("Weather")
-                            if (newsKey.isBlank()) add("News")
+                            if (geminiKey.isBlank() && grokKey.isBlank()) add("Gemini/Grok (need at least one)")
+                            if (weatherKey.isBlank()) add("Weather (optional)")
+                            if (newsKey.isBlank()) add("News (optional)")
                         }
                         if (missingKeys.isNotEmpty()) {
                             Spacer(modifier = Modifier.height(8.dp))
@@ -377,7 +396,7 @@ fun SettingsScreen(
 
                         // Gemini API key hint
                         Text(
-                            text = "TIP: Add multiple Gemini keys separated by commas for fallback",
+                            text = "Gemini is primary AI. Grok is automatic fallback when Gemini fails. At least one key required.",
                             style = MaterialTheme.typography.labelSmall,
                             color = Amber,
                         )
