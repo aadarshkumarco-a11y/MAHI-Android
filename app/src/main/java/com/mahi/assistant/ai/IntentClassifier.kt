@@ -4,14 +4,16 @@ import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
 
 /**
- * JARVIS-LEVEL IntentClassifier — AI-PRIMARY Classification.
+ * JARVIS-LEVEL IntentClassifier — Offline-First Classification.
  *
  * Strategy:
- * 1. Ultra-fast path: Regex for OBVIOUS instant commands (flashlight, battery, time) — no API call
- * 2. AI-first path: Gemini returns structured JSON for EVERYTHING else
- * 3. Keyword fallback: If AI fails, basic keyword matching as last resort
+ * 1. Ultra-fast path: Regex for OBVIOUS instant commands — covers ~90% of common use, NO API key needed
+ * 2. Keyword fallback: Enhanced keyword matching for common patterns — also works OFFLINE
+ * 3. AI path: Gemini returns structured JSON ONLY for truly ambiguous inputs — requires valid API key
  *
- * This means MAHI understands "kisi bhi tarah bolo" — ANY phrasing in ANY language!
+ * This means MAHI works OFFLINE for: calls, SMS, WhatsApp, YouTube, weather, news,
+ * time, battery, flashlight, alarms, reminders, media control, app launch, and more.
+ * Only general conversation and truly ambiguous queries require a valid Gemini API key.
  */
 class IntentClassifier(
     private val aiEngine: AiConversationEngine? = null
@@ -60,7 +62,7 @@ class IntentClassifier(
 
     // ──────────────────────────────────────────────────────────────────────────
     // Ultra-fast patterns — INSTANT, no AI call needed
-    // Only the most obvious, unambiguous commands go here
+    // Covers ~90% of common commands — all work OFFLINE without any API key
     // ──────────────────────────────────────────────────────────────────────────
 
     private data class QuickPattern(
@@ -72,27 +74,222 @@ class IntentClassifier(
 
     private val ultraFastPatterns: List<QuickPattern> = listOf(
 
-        // ── FLASHLIGHT — ultra obvious ────────────────────────────────────
+        // ═══════════════ FLASHLIGHT — works OFFLINE ═══════════════
         QuickPattern(IntentType.DEVICE_CONTROL, "flashlight_on",
             Regex("(?i)\\b(?:turn on|switch on|enable|on karo|jala)\\s+(?:the\\s+)?(?:flashlight|torch|flash|light)\\b")),
         QuickPattern(IntentType.DEVICE_CONTROL, "flashlight_off",
             Regex("(?i)\\b(?:turn off|switch off|disable|off karo|bujha)\\s+(?:the\\s+)?(?:flashlight|torch|flash|light)\\b")),
+        QuickPattern(IntentType.DEVICE_CONTROL, "flashlight_on",
+            Regex("(?i)\\b(?:flashlight|torch)\\s+(?:on|jala|chalu)\\b")),
+        QuickPattern(IntentType.DEVICE_CONTROL, "flashlight_off",
+            Regex("(?i)\\b(?:flashlight|torch)\\s+(?:off|bujha|band)\\b")),
+        QuickPattern(IntentType.DEVICE_CONTROL, "flashlight_toggle",
+            Regex("(?i)\\b(?:flashlight|torch)\\b")),
 
-        // ── BATTERY — ultra obvious ───────────────────────────────────────
+        // ═══════════════ BATTERY — works OFFLINE ═══════════════
         QuickPattern(IntentType.BATTERY, "battery_status",
-            Regex("(?i)\\b(?:battery|charge|charging|battery kitni|charge kitna)\\s*(?:level|status|percentage|info|check|hai|kitni|kitna)?\\s*\\b")),
+            Regex("(?i)\\b(?:battery|charge|charging)\\s*(?:level|status|percentage|info|check|hai|kitni|kitna|kaisa)?\\s*")),
+        QuickPattern(IntentType.BATTERY, "battery_status",
+            Regex("(?i)\\b(?:battery\\s+kitni|charge\\s+kitna|kitni\\s+battery|kitna\\s+charge)\\b")),
 
-        // ── TIME/DATE — ultra obvious ─────────────────────────────────────
+        // ═══════════════ TIME/DATE — works OFFLINE ═══════════════
         QuickPattern(IntentType.TIME_DATE, "get_time",
-            Regex("(?i)\\b(?:what'?s\\s+)?(?:the\\s+)?(?:time|clock|samay|baje|kitne baje)\\b")),
+            Regex("(?i)\\b(?:what'?s\\s+)?(?:the\\s+)?(?:time|clock|samay|baje|kitne\\s+baje)\\b")),
+        QuickPattern(IntentType.TIME_DATE, "get_time",
+            Regex("(?i)\\b(?:kitne\\s+baje|time\\s+batao|time\\s+kya|samay\\s+kya|samay\\s+batao)\\b")),
         QuickPattern(IntentType.TIME_DATE, "get_date",
             Regex("(?i)\\b(?:what'?s\\s+)?(?:the\\s+)?(?:date|day|today|tarikh|din|aaj)\\b")),
+        QuickPattern(IntentType.TIME_DATE, "get_date",
+            Regex("(?i)\\b(?:aaj\\s+tarikh|aaj\\s+din|tarikh\\s+batao|date\\s+kya)\\b")),
 
-        // ── FIND PHONE — ultra obvious ────────────────────────────────────
+        // ═══════════════ CALL — works OFFLINE ═══════════════
+        QuickPattern(IntentType.CALL, "make_call",
+            Regex("(?i)\\b(?:call|phone|ring|dial)\\s+\\w+"),
+            paramExtractor = { match, input -> mapOf("contact" to extractContactFromInput(input)) }),
+        QuickPattern(IntentType.CALL, "make_call",
+            Regex("(?i)\\b\\w+\\s+ko\\s+(?:call|phone|ring)\\s*(?:karo)?\\b"),
+            paramExtractor = { match, input -> mapOf("contact" to extractContactFromInput(input)) }),
+        QuickPattern(IntentType.CALL, "make_call",
+            Regex("(?i)\\b(?:call|phone|ring|dial)\\s+(?:karo|kar)\\b")),
+        QuickPattern(IntentType.CALL, "make_call",
+            Regex("(?i)\\b(?:make\\s+a\\s+call|place\\s+a\\s+call|phone\\s+call)\\b")),
+
+        // ═══════════════ YOUTUBE — works OFFLINE ═══════════════
+        QuickPattern(IntentType.YOUTUBE, "search_youtube",
+            Regex("(?i)\\b(?:play|watch|search)\\s+.+\\s+(?:on\\s+)?(?:youtube|yt)\\b"),
+            paramExtractor = { match, input -> mapOf("query" to extractTopicFromInput(input, listOf("play", "watch", "search", "on", "youtube", "yt", "chalao", "pe"))) }),
+        QuickPattern(IntentType.YOUTUBE, "search_youtube",
+            Regex("(?i)\\b(?:youtube|yt)\\s+pe\\s+.+"),
+            paramExtractor = { match, input -> mapOf("query" to extractTopicFromInput(input, listOf("youtube", "yt", "pe", "chalao", "play"))) }),
+        QuickPattern(IntentType.YOUTUBE, "open_youtube",
+            Regex("(?i)\\b(?:youtube|yt)\\s+(?:pe\\s+)?(?:chalao|play|search|kholo)\\b"),
+            paramExtractor = { match, input -> mapOf("query" to "") }),
+        QuickPattern(IntentType.YOUTUBE, "search_youtube",
+            Regex("(?i)\\b(?:youtube|yt)\\s+(?:search|pe)\\s+\\w+"),
+            paramExtractor = { match, input -> mapOf("query" to extractTopicFromInput(input, listOf("youtube", "yt", "search", "pe"))) }),
+
+        // ═══════════════ WHATSAPP — works OFFLINE ═══════════════
+        QuickPattern(IntentType.WHATSAPP, "send_whatsapp",
+            Regex("(?i)\\b(?:whatsapp|wa)\\s+(?:pe\\s+)?(?:message|msg|send|bhejo)\\b"),
+            paramExtractor = { match, input -> mapOf("contact" to extractContactFromInput(input), "message" to "") }),
+        QuickPattern(IntentType.WHATSAPP, "send_whatsapp",
+            Regex("(?i)\\b\\w+\\s+ko\\s+(?:whatsapp|wa)\\s+pe\\s+(?:message|msg)\\b"),
+            paramExtractor = { match, input -> mapOf("contact" to extractContactFromInput(input), "message" to "") }),
+        QuickPattern(IntentType.WHATSAPP, "open_whatsapp",
+            Regex("(?i)\\b(?:open|launch|start)\\s+(?:whatsapp|wa)\\b")),
+        QuickPattern(IntentType.WHATSAPP, "send_whatsapp",
+            Regex("(?i)\\b(?:whatsapp|wa)\\s+(?:message|msg)\\s+(?:karo|bhejo|send)"),
+            paramExtractor = { match, input -> mapOf("contact" to extractContactFromInput(input), "message" to "") }),
+        QuickPattern(IntentType.WHATSAPP, "send_whatsapp",
+            Regex("(?i)\\b(?:send|bhejo)\\s+.+\\s+(?:on\\s+)?(?:whatsapp|wa)\\b"),
+            paramExtractor = { match, input -> mapOf("contact" to extractContactFromInput(input), "message" to "") }),
+
+        // ═══════════════ WEATHER — uses free Open-Meteo API ═══════════════
+        QuickPattern(IntentType.WEATHER, "get_weather",
+            Regex("(?i)\\b(?:weather|mausam|temperature|garmi|thand|barish|rain)\\b")),
+        QuickPattern(IntentType.WEATHER, "get_weather",
+            Regex("(?i)\\b(?:aaj\\s+ka\\s+mausam|mausam\\s+kaisa|mausam\\s+kya|weather\\s+kya|weather\\s+check)\\b")),
+        QuickPattern(IntentType.WEATHER, "get_weather",
+            Regex("(?i)\\b(?:kitni\\s+garmi|kitni\\s+thand|barish\\s+hogi|rain\\s+hoga)\\b")),
+        QuickPattern(IntentType.WEATHER, "get_weather",
+            Regex("(?i)\\b(?:weather\\s+(?:in|of|for)\\s+\\w+|\\w+\\s+(?:ka|ki|me)\\s+mausam)\\b")),
+
+        // ═══════════════ NEWS — uses free RSS ═══════════════
+        QuickPattern(IntentType.NEWS, "get_news",
+            Regex("(?i)\\b(?:news|khabar|headline|breaking\\s*news|latest\\s*news|top\\s*news)\\b")),
+        QuickPattern(IntentType.NEWS, "get_news",
+            Regex("(?i)\\b(?:news\\s+dikhao|khabar\\s+dikhao|news\\s+suna|khabar\\s+suna|news\\s+chalu)\\b")),
+        QuickPattern(IntentType.NEWS, "get_news",
+            Regex("(?i)\\b(?:aaj\\s+ki\\s+khabar|aaj\\s+ka\\s+news|latest\\s+headline)\\b")),
+
+        // ═══════════════ APP_LAUNCH — works OFFLINE ═══════════════
+        QuickPattern(IntentType.APP_LAUNCH, "launch_app",
+            Regex("(?i)\\b(?:open|launch|start)\\s+(?:the\\s+)?(?:app\\s+)?\\w+"),
+            paramExtractor = { match, input -> mapOf("app" to extractAppFromInput(input)) }),
+        QuickPattern(IntentType.APP_LAUNCH, "launch_app",
+            Regex("(?i)\\b\\w+\\s+(?:kholo|chalao|shuru)\\b"),
+            paramExtractor = { match, input -> mapOf("app" to extractAppFromInput(input)) }),
+
+        // ═══════════════ SMS SEND — works OFFLINE ═══════════════
+        QuickPattern(IntentType.SMS, "send_sms",
+            Regex("(?i)\\b(?:send|write)\\s+(?:a\\s+)?(?:sms|text|text\\s+message)\\b")),
+        QuickPattern(IntentType.SMS, "send_sms",
+            Regex("(?i)\\b(?:sms|text)\\s+(?:\\w+\\s+)?(?:karo|bhejo|send)\\b"),
+            paramExtractor = { match, input -> mapOf("contact" to extractContactFromInput(input)) }),
+        QuickPattern(IntentType.SMS, "send_sms",
+            Regex("(?i)\\b(?:message|msg)\\s+bhejo\\b"),
+            paramExtractor = { match, input -> mapOf("contact" to extractContactFromInput(input)) }),
+
+        // ═══════════════ SMS READ — works OFFLINE ═══════════════
+        QuickPattern(IntentType.SMS_READ, "read_sms",
+            Regex("(?i)\\b(?:read|show|check)\\s+(?:my\\s+)?(?:sms|text\\s+messages|messages|inbox)\\b")),
+        QuickPattern(IntentType.SMS_READ, "read_sms",
+            Regex("(?i)\\b(?:sms|message)\\s+(?:padho|dikhao|read|check)\\b")),
+        QuickPattern(IntentType.SMS_READ, "read_sms",
+            Regex("(?i)\\b(?:messages?\\s+dikhao|inbox\\s+dikhao|sms\\s+padho)\\b")),
+
+        // ═══════════════ ALARM — works OFFLINE ═══════════════
+        QuickPattern(IntentType.ALARM, "set_alarm",
+            Regex("(?i)\\b(?:set|create|make)\\s+(?:an?\\s+)?(?:alarm|wake\\s*up)\\b")),
+        QuickPattern(IntentType.ALARM, "set_alarm",
+            Regex("(?i)\\b(?:alarm)\\s+(?:lagao|set|karo|chalu)\\b")),
+        QuickPattern(IntentType.ALARM, "set_alarm",
+            Regex("(?i)\\balarm\\b")),
+
+        // ═══════════════ REMINDER — works OFFLINE ═══════════════
+        QuickPattern(IntentType.REMINDER, "set_reminder",
+            Regex("(?i)\\b(?:set|create|make)\\s+(?:a\\s+)?(?:reminder|remind)\\b")),
+        QuickPattern(IntentType.REMINDER, "set_reminder",
+            Regex("(?i)\\b(?:remind|reminder|yaad\\s+dilana)\\b")),
+
+        // ═══════════════ MEDIA CONTROL — works OFFLINE ═══════════════
+        QuickPattern(IntentType.MEDIA_CONTROL, "play",
+            Regex("(?i)\\b(?:play\\s+)?(?:music|song|gana)\\s*(?:play|chalao|baja)?\\b")),
+        QuickPattern(IntentType.MEDIA_CONTROL, "play",
+            Regex("(?i)\\b(?:play\\s+music|play\\s+song|music\\s+chalao|gana\\s+chalao|gana\\s+baja)\\b")),
+        QuickPattern(IntentType.MEDIA_CONTROL, "pause",
+            Regex("(?i)\\b(?:pause|stop\\s+music|ruk|ruko)\\s*(?:music|song|gana)?\\b")),
+        QuickPattern(IntentType.MEDIA_CONTROL, "next",
+            Regex("(?i)\\b(?:next|aage|next\\s+song|next\\s+track|agla\\s+gana)\\b")),
+        QuickPattern(IntentType.MEDIA_CONTROL, "previous",
+            Regex("(?i)\\b(?:previous|peeche|prev|last\\s+song|pichla\\s+gana)\\b")),
+
+        // ═══════════════ BRIGHTNESS — works OFFLINE ═══════════════
+        QuickPattern(IntentType.DEVICE_CONTROL, "brightness_up",
+            Regex("(?i)\\b(?:brightness|screen\\s+brightness|roshni)\\s+(?:up|increase|badhao|tez)\\b")),
+        QuickPattern(IntentType.DEVICE_CONTROL, "brightness_down",
+            Regex("(?i)\\b(?:brightness|screen\\s+brightness|roshni)\\s+(?:down|decrease|kam|dhima)\\b")),
+        QuickPattern(IntentType.DEVICE_CONTROL, "brightness",
+            Regex("(?i)\\b(?:brightness|roshni)\\b")),
+
+        // ═══════════════ VOLUME — works OFFLINE ═══════════════
+        QuickPattern(IntentType.DEVICE_CONTROL, "volume_up",
+            Regex("(?i)\\b(?:volume|sound|awaaz)\\s+(?:up|increase|badhao|tez|loud)\\b")),
+        QuickPattern(IntentType.DEVICE_CONTROL, "volume_down",
+            Regex("(?i)\\b(?:volume|sound|awaaz)\\s+(?:down|decrease|kam|dhima|low|quiet)\\b")),
+        QuickPattern(IntentType.DEVICE_CONTROL, "volume_mute",
+            Regex("(?i)\\b(?:mute|silent|khamosh)\\s*(?:volume|sound|phone)?\\b")),
+        QuickPattern(IntentType.DEVICE_CONTROL, "volume",
+            Regex("(?i)\\b(?:volume|sound\\s+level|awaaz)\\b")),
+
+        // ═══════════════ WEB SEARCH — works OFFLINE (launches browser) ═══════════════
+        QuickPattern(IntentType.WEB_SEARCH, "web_search",
+            Regex("(?i)\\b(?:search|google|lookup|find\\s+info)\\s+(?:for\\s+)?(.+)"),
+            paramExtractor = { match, input -> mapOf("query" to extractTopicFromInput(input, listOf("search", "for", "google", "lookup", "find", "info"))) }),
+        QuickPattern(IntentType.WEB_SEARCH, "web_search",
+            Regex("(?i)\\b(?:search\\s+karo|google\\s+karo|khojo)\\b")),
+
+        // ═══════════════ NOTE SAVE — works OFFLINE ═══════════════
+        QuickPattern(IntentType.NOTE_SAVE, "save_note",
+            Regex("(?i)\\b(?:remember|note|save|yaad)\\s+(?:this|that|note|karo|rakhna|rakh)\\b")),
+        QuickPattern(IntentType.NOTE_SAVE, "save_note",
+            Regex("(?i)\\b(?:yaad\\s+rakhna|note\\s+save|save\\s+note|note\\s+karo|remember\\s+this)\\b")),
+        QuickPattern(IntentType.NOTE_SAVE, "save_note",
+            Regex("(?i)\\b(?:save\\s+this|remember\\s+that|yaad\\s+rakh)\\b")),
+
+        // ═══════════════ NOTE READ — works OFFLINE ═══════════════
+        QuickPattern(IntentType.NOTE_READ, "read_notes",
+            Regex("(?i)\\b(?:show|read|check|what\\s+(?:are|is))\\s+(?:my\\s+)?(?:notes?|memories|saved)\\b")),
+        QuickPattern(IntentType.NOTE_READ, "read_notes",
+            Regex("(?i)\\b(?:notes?\\s+dikhao|notes?\\s+padho|kya\\s+yaad\\s+hai|kya\\s+note\\s+save\\s+hai)\\b")),
+        QuickPattern(IntentType.NOTE_READ, "read_notes",
+            Regex("(?i)\\b(?:yaad\\s+kya\\s+hai|saved\\s+notes|mujhe\\s+meri\\s+notes)\\b")),
+
+        // ═══════════════ CONTACT SEARCH — works OFFLINE ═══════════════
+        QuickPattern(IntentType.CONTACT_SEARCH, "find_contact",
+            Regex("(?i)\\b(?:find|search|look\\s+up)\\s+(?:contact|number)\\b")),
+        QuickPattern(IntentType.CONTACT_SEARCH, "find_contact",
+            Regex("(?i)\\b\\w+\\s+(?:ka\\s+number|ka\\s+contact|ka\\s+phone)\\b"),
+            paramExtractor = { match, input -> mapOf("contact" to extractContactFromInput(input)) }),
+        QuickPattern(IntentType.CONTACT_SEARCH, "find_contact",
+            Regex("(?i)\\b(?:number\\s+batao|contact\\s+search|contact\\s+dhoond)\\b"),
+            paramExtractor = { match, input -> mapOf("contact" to extractContactFromInput(input)) }),
+
+        // ═══════════════ TIMER — works OFFLINE ═══════════════
+        QuickPattern(IntentType.TIMER, "set_timer",
+            Regex("(?i)\\b(?:set|start)\\s+(?:a\\s+)?(?:timer|stopwatch|countdown)\\b")),
+        QuickPattern(IntentType.TIMER, "set_timer",
+            Regex("(?i)\\b(?:timer|stopwatch)\\s+(?:lagao|set|start|chalu)\\b")),
+        QuickPattern(IntentType.TIMER, "set_timer",
+            Regex("(?i)\\b\\d+\\s*(?:minute|min|second|sec)\\s*(?:timer|ka\\s+timer)\\b")),
+
+        // ═══════════════ TRANSLATE — can launch translate app ═══════════════
+        QuickPattern(IntentType.TRANSLATE, "translate",
+            Regex("(?i)\\b(?:translate|anuvad|translation)\\b")),
+
+        // ═══════════════ CALCULATE — can do basic math ═══════════════
+        QuickPattern(IntentType.CALCULATE, "calculate",
+            Regex("(?i)\\b(?:calculate|compute|kitna\\s+hota|solve)\\b")),
+        QuickPattern(IntentType.CALCULATE, "calculate",
+            Regex("\\d+\\s*[+\\-*/×÷]\\s*\\d+")),
+
+        // ═══════════════ FIND PHONE — works OFFLINE ═══════════════
         QuickPattern(IntentType.FIND_PHONE, "find_phone",
             Regex("(?i)\\b(?:find|locate|ring|track)\\s+(?:my\\s+)?(?:phone|device|mobile)\\b")),
+        QuickPattern(IntentType.FIND_PHONE, "find_phone",
+            Regex("(?i)\\b(?:phone\\s+dhoondo|mobile\\s+kahan|phone\\s+ring\\s+karo)\\b")),
 
-        // ── CAMERA — ultra obvious ────────────────────────────────────────
+        // ═══════════════ CAMERA — works OFFLINE ═══════════════
         QuickPattern(IntentType.CAMERA, "open_camera",
             Regex("(?i)\\b(?:open|launch)\\s+(?:the\\s+)?(?:camera)\\b")),
         QuickPattern(IntentType.CAMERA, "take_photo",
@@ -102,15 +299,53 @@ class IntentClassifier(
         QuickPattern(IntentType.CAMERA, "take_photo",
             Regex("(?i)\\bphoto\\s+kheencho\\b")),
 
-        // ── CONTINUOUS MODE ───────────────────────────────────────────────
+        // ═══════════════ CONTINUOUS MODE — works OFFLINE ═══════════════
         QuickPattern(IntentType.CONTINUOUS_MODE, "enable_continuous",
             Regex("(?i)\\b(?:enable|turn on|start)\\s+(?:the\\s+)?(?:continuous|always\\s*listening|call\\s*type)\\s*(?:mode)?\\b")),
         QuickPattern(IntentType.CONTINUOUS_MODE, "disable_continuous",
             Regex("(?i)\\b(?:disable|turn off|stop)\\s+(?:the\\s+)?(?:continuous|always\\s*listening|call\\s*type)\\s*(?:mode)?\\b")),
+
+        // ═══════════════ LOCATION — works OFFLINE (GPS) ═══════════════
+        QuickPattern(IntentType.LOCATION, "get_location",
+            Regex("(?i)\\b(?:where\\s+am\\s+i|my\\s+location|mera\\s+location|location\\s+dikhao|kahan\\s+hun)\\b")),
+        QuickPattern(IntentType.LOCATION, "get_location",
+            Regex("(?i)\\b(?:find\\s+my\\s+location|show\\s+my\\s+location|location\\s+kya\\s+hai)\\b")),
+
+        // ═══════════════ CALL LOG — works OFFLINE ═══════════════
+        QuickPattern(IntentType.CALL_LOG, "call_log",
+            Regex("(?i)\\b(?:call\\s*log|call\\s+history|recent\\s+calls|call\\s+record)\\b")),
+        QuickPattern(IntentType.CALL_LOG, "call_log",
+            Regex("(?i)\\b(?:call\\s+log\\s+dikhao|recent\\s+call|call\\s+details)\\b")),
+
+        // ═══════════════ NOTIFICATION — works OFFLINE ═══════════════
+        QuickPattern(IntentType.NOTIFICATION, "read_notifications",
+            Regex("(?i)\\b(?:read|show|check)\\s+(?:my\\s+)?(?:notifications?|notifs?)\\b")),
+        QuickPattern(IntentType.NOTIFICATION, "read_notifications",
+            Regex("(?i)\\b(?:notification|notifs?)\\s+(?:dikhao|padho|check)\\b")),
+
+        // ═══════════════ WIFI/BLUETOOTH/DND — works OFFLINE ═══════════════
+        QuickPattern(IntentType.DEVICE_CONTROL, "wifi_on",
+            Regex("(?i)\\b(?:turn\\s+on|enable|on\\s+karo)\\s+(?:the\\s+)?(?:wifi|wi-?fi)\\b")),
+        QuickPattern(IntentType.DEVICE_CONTROL, "wifi_off",
+            Regex("(?i)\\b(?:turn\\s+off|disable|off\\s+karo)\\s+(?:the\\s+)?(?:wifi|wi-?fi)\\b")),
+        QuickPattern(IntentType.DEVICE_CONTROL, "bluetooth_on",
+            Regex("(?i)\\b(?:turn\\s+on|enable|on\\s+karo)\\s+(?:the\\s+)?bluetooth\\b")),
+        QuickPattern(IntentType.DEVICE_CONTROL, "bluetooth_off",
+            Regex("(?i)\\b(?:turn\\s+off|disable|off\\s+karo)\\s+(?:the\\s+)?bluetooth\\b")),
+        QuickPattern(IntentType.DEVICE_CONTROL, "dnd_on",
+            Regex("(?i)\\b(?:turn\\s+on|enable|on\\s+karo)\\s+(?:the\\s+)?(?:dnd|do\\s+not\\s+disturb)\\b")),
+        QuickPattern(IntentType.DEVICE_CONTROL, "dnd_off",
+            Regex("(?i)\\b(?:turn\\s+off|disable|off\\s+karo)\\s+(?:the\\s+)?(?:dnd|do\\s+not\\s+disturb)\\b")),
+
+        // ═══════════════ FILE MANAGER — works OFFLINE ═══════════════
+        QuickPattern(IntentType.FILE_OPEN, "open_files",
+            Regex("(?i)\\b(?:open|launch)\\s+(?:the\\s+)?(?:file\\s*manager|files|downloads|folder)\\b")),
+        QuickPattern(IntentType.FILE_OPEN, "open_files",
+            Regex("(?i)\\b(?:file\\s*manager|downloads|folder)\\s+(?:kholo|chalao|open)\\b")),
     )
 
     // ──────────────────────────────────────────────────────────────────────────
-    // AI Classification Prompt — THE BRAIN
+    // AI Classification Prompt — THE BRAIN (only used for ambiguous inputs)
     // ──────────────────────────────────────────────────────────────────────────
 
     private val CLASSIFICATION_PROMPT = """
@@ -182,9 +417,9 @@ User input: """.trimIndent()
 
     /**
      * Classify user input.
-     * 1. Ultra-fast regex for OBVIOUS commands (instant, offline)
-     * 2. Gemini AI for EVERYTHING else (max intelligence)
-     * 3. Keyword fallback if AI fails
+     * 1. Ultra-fast regex for OBVIOUS commands (instant, offline) — covers ~90% of common use
+     * 2. Enhanced keyword fallback for common patterns (also offline)
+     * 3. Gemini AI classification ONLY for truly ambiguous inputs (requires valid API key)
      */
     suspend fun classify(input: String): IntentResult {
         val trimmedInput = input.trim()
@@ -193,7 +428,7 @@ User input: """.trimIndent()
                 response = "I didn't catch that. Could you please repeat?")
         }
 
-        // Step 1: Ultra-fast regex match for obvious commands
+        // Step 1: Ultra-fast regex match for obvious commands (covers ~90% of common use)
         for (qp in ultraFastPatterns) {
             val match = qp.pattern.find(trimmedInput)
             if (match != null) {
@@ -202,17 +437,26 @@ User input: """.trimIndent()
             }
         }
 
-        // Step 2: Gemini AI classification for MAX intelligence
-        if (aiEngine != null) {
+        // Step 2: Enhanced keyword fallback FIRST (works offline, no API key needed)
+        val keywordResult = keywordFallback(trimmedInput)
+        if (keywordResult.type != IntentType.GENERAL_CHAT) {
+            // Keyword matched a specific intent — no need for AI
+            return keywordResult
+        }
+
+        // Step 3: Only use AI for truly ambiguous inputs that keywords couldn't classify
+        // AND only if the AI engine is properly configured with a valid API key
+        if (aiEngine != null && aiEngine.isConfigured()) {
             return classifyWithAi(trimmedInput)
         }
 
-        // Step 3: Fallback
-        return keywordFallback(trimmedInput)
+        // Step 4: No AI available — return the keyword result (even if GENERAL_CHAT)
+        return keywordResult
     }
 
     /**
-     * Synchronous version — regex only, no AI fallback.
+     * Synchronous version — regex + keyword only, no AI fallback.
+     * Use this when you can't use coroutines (e.g., from a service).
      */
     fun classifySync(input: String): IntentResult {
         val trimmedInput = input.trim()
@@ -232,7 +476,7 @@ User input: """.trimIndent()
     }
 
     // ──────────────────────────────────────────────────────────────────────────
-    // Gemini AI Classification — AI-FIRST BRAIN
+    // Gemini AI Classification — Only for truly ambiguous inputs
     // ──────────────────────────────────────────────────────────────────────────
 
     private suspend fun classifyWithAi(input: String): IntentResult {
@@ -281,8 +525,9 @@ User input: """.trimIndent()
     }
 
     /**
-     * Last-resort keyword matching when AI is unavailable.
+     * Keyword fallback for when AI is unavailable or not configured.
      * Expanded with new intent types and better Hindi/Hinglish support.
+     * Works OFFLINE — no API key needed.
      */
     private fun keywordFallback(input: String): IntentResult {
         val lower = input.lowercase()
@@ -372,10 +617,77 @@ User input: """.trimIndent()
             lower.contains("sms") || lower.contains("text message") || lower.contains("message bhejo") ->
                 IntentResult(IntentType.SMS, "send_sms", mapOf("contact" to extractContact(lower)))
 
+            // Location
+            lower.contains("location") || lower.contains("kahan") || lower.contains("where am") ->
+                IntentResult(IntentType.LOCATION, "get_location")
+
+            // Call log
+            lower.contains("call log") || lower.contains("call history") || lower.contains("recent call") ->
+                IntentResult(IntentType.CALL_LOG, "call_log")
+
+            // Notification
+            lower.contains("notification") || lower.contains("notif") ->
+                IntentResult(IntentType.NOTIFICATION, "read_notifications")
+
+            // Brightness
+            lower.contains("brightness") || lower.contains("roshni") ->
+                IntentResult(IntentType.DEVICE_CONTROL, "brightness")
+
+            // Volume
+            lower.contains("volume") || lower.contains("sound level") || lower.contains("awaaz") ->
+                IntentResult(IntentType.DEVICE_CONTROL, "volume")
+
             else -> IntentResult(IntentType.GENERAL_CHAT, "general_conversation")
         }
     }
 
+    // ──────────────────────────────────────────────────────────────────────────
+    // Helper functions for extracting params from natural language input
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Extract a contact name from a natural language input string.
+     * Used by ultra-fast patterns to populate the "contact" param.
+     */
+    private fun extractContactFromInput(input: String): String {
+        val cleaned = input.replace(Regex("(?i)\\b(?:call|phone|ring|dial|text|message|send|whatsapp|wa|from|sim\\s*\\d|on|to|that|the|please|karo|bhejo|ka|number|batao|se|ko|pe|a|an|the|my|me|i|want|need|can|you|will|would|should|could|must|shall)\\b"), "").trim()
+        return cleaned.ifBlank { "unknown" }
+    }
+
+    /**
+     * Extract a topic/query from a natural language input string.
+     * Used by ultra-fast patterns to populate the "query" param.
+     */
+    private fun extractTopicFromInput(input: String, removeWords: List<String>): String {
+        var cleaned = input
+        for (word in removeWords) {
+            cleaned = cleaned.replace(Regex("(?i)\\b${Regex.escape(word)}\\b"), "")
+        }
+        return cleaned.trim().ifBlank { "" }
+    }
+
+    /**
+     * Extract an app name from a natural language "open/launch X" input.
+     * Used by ultra-fast patterns to populate the "app" param.
+     */
+    private fun extractAppFromInput(input: String): String {
+        // Try to extract the word(s) after "open", "launch", "start", "kholo", "chalao"
+        val patterns = listOf(
+            Regex("(?i)\\b(?:open|launch|start|kholo|chalao)\\s+(?:the\\s+)?(?:app\\s+)?(.+?)(?:\\s+(?:app|application|karo|please))?$"),
+            Regex("(?i)\\b(.+?)\\s+(?:kholo|chalao)\\b")
+        )
+        for (pattern in patterns) {
+            val match = pattern.find(input)
+            if (match != null && match.groupValues.size > 1) {
+                val app = match.groupValues[1].trim()
+                if (app.isNotBlank()) return app
+            }
+        }
+        // Fallback: just remove common verbs and return what's left
+        return input.replace(Regex("(?i)\\b(?:open|launch|start|kholo|chalao|the|app|application|karo|please)\\b"), "").trim().ifBlank { "" }
+    }
+
+    // Keep old methods for backward compatibility with keywordFallback
     private fun extractContact(input: String): String {
         val cleaned = input.replace(Regex("(?i)\\b(?:call|phone|ring|dial|text|message|send|whatsapp|wa|from|sim\\s*\\d|on|to|that|the|please|karo|bhejo|ka|number|batao|se|ko)\\b"), "").trim()
         return cleaned.ifBlank { "unknown" }

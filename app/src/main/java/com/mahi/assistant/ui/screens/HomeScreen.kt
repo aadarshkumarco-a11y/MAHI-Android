@@ -88,14 +88,49 @@ fun HomeScreen(
                 color = TextSecondary,
             )
 
-            // Show API key warning
-            if (settingsState.geminiKey.isBlank()) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Set Gemini API key in Settings first!",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Amber,
-                )
+            // ── API Key Warning Banner ───────────────────────────
+            if (!settingsState.isGeminiKeyValid) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                    color = Amber.copy(alpha = 0.15f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Amber.copy(alpha = 0.5f))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Warning,
+                            contentDescription = "API Key Warning",
+                            tint = Amber,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (settingsState.geminiKey.isBlank())
+                                    "Gemini API Key Required"
+                                else
+                                    "Invalid Gemini API Key",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Amber,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = if (settingsState.geminiKey.isBlank())
+                                    "Go to Settings to enter your key. Free key at aistudio.google.com"
+                                else
+                                    "Your key should start with 'AIza'. Update it in Settings.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Amber.copy(alpha = 0.8f)
+                            )
+                        }
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.weight(1f))
@@ -173,7 +208,7 @@ fun HomeScreen(
             Spacer(modifier = Modifier.height(12.dp))
 
             // ── Status Indicators ───────────────────────────────
-            StatusIndicators()
+            StatusIndicators(isAiConfigured = settingsState.isGeminiKeyValid)
 
             Spacer(modifier = Modifier.height(8.dp))
         }
@@ -347,14 +382,14 @@ private fun TextInputBar(
 }
 
 @Composable
-private fun StatusIndicators() {
+private fun StatusIndicators(isAiConfigured: Boolean = false) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceEvenly,
     ) {
         StatusDot(label = "Voice Ready", color = NeonGreen)
-        StatusDot(label = "AI Online", color = NeonCyan)
-        StatusDot(label = "Services Active", color = ElectricPurple)
+        StatusDot(label = if (isAiConfigured) "AI Online" else "AI Offline", color = if (isAiConfigured) NeonCyan else Amber)
+        StatusDot(label = "Device Control", color = ElectricPurple)
     }
 }
 

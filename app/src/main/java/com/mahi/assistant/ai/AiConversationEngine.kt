@@ -119,6 +119,22 @@ class AiConversationEngine(
     }
 
     /**
+     * Check if the AI engine is properly configured with a valid API key.
+     * Valid Gemini keys start with "AIza" and are at least 30 characters.
+     */
+    fun isConfigured(): Boolean {
+        val key = getApiKey()
+        return key.isNotBlank() && key.startsWith("AIza") && key.length >= 30
+    }
+
+    /**
+     * Check if any API key is set (even if format might be invalid).
+     */
+    fun isKeySet(): Boolean {
+        return getApiKey().isNotBlank()
+    }
+
+    /**
      * Clear the conversation history.
      */
     fun clearHistory() {
@@ -195,7 +211,7 @@ class AiConversationEngine(
         val apiKeys = getApiKeys()
 
         if (apiKeys.isEmpty()) {
-            return Pair(null, "API key not configured. Please set your Gemini API key in Settings.")
+            return Pair(null, "Gemini API key not configured. Please go to Settings and enter your API key. Get a free key from aistudio.google.com")
         }
 
         for (apiKey in apiKeys) {
@@ -209,7 +225,7 @@ class AiConversationEngine(
             if (error != null) return Pair(null, error)
         }
 
-        return Pair(null, "All API keys failed. Please check your Gemini API keys in Settings.")
+        return Pair(null, "All Gemini API keys failed. Please check your API keys in Settings. Keys should start with 'AIza'. Get a free key from aistudio.google.com")
     }
 
     private fun formatHttpError(code: Int, message: String?): String {
@@ -226,11 +242,16 @@ class AiConversationEngine(
     }
 
     private fun formatExceptionError(e: Exception): String {
-        return when (e) {
-            is java.net.UnknownHostException -> "No internet connection. Please check your network."
-            is java.net.SocketTimeoutException -> "Request timed out. Please try again."
-            is java.net.ConnectException -> "Cannot connect to Gemini. Please check your internet."
-            else -> "Connection error. Please check your internet and try again."
+        val msg = e.message ?: ""
+        return when {
+            msg.contains("401") || msg.contains("403") ->
+                "Your Gemini API key was rejected. Please update it in Settings. Keys should start with 'AIza'. Get a free key from aistudio.google.com"
+            msg.contains("invalid", ignoreCase = true) ->
+                "Your Gemini API key appears to be invalid. Please update it in Settings."
+            e is java.net.UnknownHostException -> "No internet connection. Please check your network."
+            e is java.net.SocketTimeoutException -> "Request timed out. Please try again."
+            e is java.net.ConnectException -> "Cannot connect to Gemini. Please check your internet."
+            else -> "Connection error. If this persists, check your Gemini API key in Settings."
         }
     }
 
@@ -304,7 +325,13 @@ class AiConversationEngine(
         try {
             val apiKey = getApiKey()
             if (apiKey.isBlank()) {
-                val errorMsg = "API key not configured. Please set your Gemini API key in Settings."
+                val errorMsg = "I need a valid Gemini API key to respond. Please go to Settings and enter your Gemini API key. You can get a free key from aistudio.google.com"
+                _lastError.value = errorMsg
+                _isLoading.value = false
+                return errorMsg
+            }
+            if (!apiKey.startsWith("AIza") || apiKey.length < 30) {
+                val errorMsg = "Your Gemini API key appears to be invalid (keys should start with 'AIza' and be at least 30 characters). Please update it in Settings. Get a free key from aistudio.google.com"
                 _lastError.value = errorMsg
                 _isLoading.value = false
                 return errorMsg
@@ -384,11 +411,16 @@ class AiConversationEngine(
             return responseText
 
         } catch (e: Exception) {
-            val errorMsg = when (e) {
-                is java.net.UnknownHostException -> "No internet connection. Please check your network."
-                is java.net.SocketTimeoutException -> "Request timed out. Please try again."
-                is java.net.ConnectException -> "Cannot connect to Gemini. Please check your internet."
-                else -> formatExceptionError(e)
+            val errorMsg = when {
+                e.message?.contains("401") == true || e.message?.contains("403") == true ->
+                    "Your Gemini API key was rejected. Please go to Settings and enter a valid key. Get a free key from aistudio.google.com"
+                e.message?.contains("invalid", ignoreCase = true) == true ->
+                    "Your Gemini API key appears to be invalid. Please update it in Settings. Get a free key from aistudio.google.com"
+                e is java.net.UnknownHostException -> "No internet connection. Please check your network."
+                e is java.net.SocketTimeoutException -> "Request timed out. Please try again."
+                e is java.net.ConnectException -> "Cannot connect to Gemini. Please check your internet."
+                e.message?.contains("API key", ignoreCase = true) == true -> e.message ?: "API key error. Please check Settings."
+                else -> "I'm having trouble connecting. Please check your Gemini API key in Settings, or verify your internet connection."
             }
             _lastError.value = errorMsg
             _isLoading.value = false
@@ -404,7 +436,10 @@ class AiConversationEngine(
     suspend fun classifyIntent(prompt: String): String {
         val apiKey = getApiKey()
         if (apiKey.isBlank()) {
-            return "API key not configured."
+            return "API key not configured. Please set your Gemini API key in Settings."
+        }
+        if (!apiKey.startsWith("AIza") || apiKey.length < 30) {
+            return "API key invalid. Please enter a valid Gemini API key in Settings."
         }
 
         _isLoading.value = true
@@ -448,7 +483,10 @@ class AiConversationEngine(
     suspend fun queryOnce(message: String): String {
         val apiKey = getApiKey()
         if (apiKey.isBlank()) {
-            return "API key not configured."
+            return "API key not configured. Please set your Gemini API key in Settings."
+        }
+        if (!apiKey.startsWith("AIza") || apiKey.length < 30) {
+            return "API key invalid. Please enter a valid Gemini API key in Settings."
         }
 
         _isLoading.value = true
@@ -498,7 +536,15 @@ class AiConversationEngine(
         try {
             val apiKeys = getApiKeys()
             if (apiKeys.isEmpty()) {
-                val errorMsg = "API key not configured. Please set your Gemini API key in Settings."
+                val errorMsg = "I need a valid Gemini API key to respond. Please go to Settings and enter your Gemini API key. You can get a free key from aistudio.google.com"
+                _lastError.value = errorMsg
+                _isLoading.value = false
+                return errorMsg
+            }
+            // Validate key format before making API call
+            val primary = apiKeys.first()
+            if (!primary.startsWith("AIza") || primary.length < 30) {
+                val errorMsg = "Your Gemini API key appears to be invalid (should start with 'AIza'). Please update it in Settings. Get a free key from aistudio.google.com"
                 _lastError.value = errorMsg
                 _isLoading.value = false
                 return errorMsg
@@ -541,10 +587,15 @@ class AiConversationEngine(
             return responseText
 
         } catch (e: Exception) {
-            val errorMsg = when (e) {
-                is java.net.UnknownHostException -> "No internet connection."
-                is java.net.SocketTimeoutException -> "Request timed out."
-                else -> "I'm having trouble connecting right now. Please check your internet connection."
+            val errorMsg = when {
+                e.message?.contains("401") == true || e.message?.contains("403") == true ->
+                    "Your Gemini API key was rejected. Please go to Settings and enter a valid key. Get a free key from aistudio.google.com"
+                e.message?.contains("invalid", ignoreCase = true) == true ->
+                    "Your Gemini API key appears to be invalid. Please update it in Settings. Get a free key from aistudio.google.com"
+                e is java.net.UnknownHostException -> "No internet connection. Please check your network."
+                e is java.net.SocketTimeoutException -> "Request timed out. Please try again."
+                e.message?.contains("API key", ignoreCase = true) == true -> e.message ?: "API key error. Please check your Gemini API key in Settings."
+                else -> "I'm having trouble connecting. This might be an API key issue — please check your Gemini API key in Settings, or check your internet connection."
             }
             _lastError.value = errorMsg
             _isLoading.value = false

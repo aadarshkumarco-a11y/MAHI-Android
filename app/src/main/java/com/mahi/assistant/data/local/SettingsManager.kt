@@ -42,14 +42,15 @@ class SettingsManager @Inject constructor(
         const val KEY_SAVED_NOTES = "saved_notes"
         const val KEY_CONTINUOUS_MODE = "continuous_mode"
 
-        // Pre-configured API keys (base64-encoded to avoid push protection blocks)
-        private val DEFAULT_GEMINI_KEY by lazy { decode("QVEuYWI4Uk42S1pLQi05VkZNTFRnbjVqa21tLVhVS1ZpVXVnSU56Q0JpckxZMUdXRGhnZmc=") }
-        private val DEFAULT_WEATHER_KEY by lazy { decode("N2Y4ZTA2MDA3YmY4OWNhYTk1ZTVkNGRiM2FkMGNjZDA=") }
-        private val DEFAULT_NEWS_KEY by lazy { decode("ZjJjNzQ0OWRiMjgyYzI2YjFiMDQ0OGFmMzYyZjY1MGY=") }
+        // No default Gemini key — user must provide their own valid key.
+        // Valid Gemini API keys start with "AIza" and are at least 30 characters long.
+        // Get a free key from: https://aistudio.google.com/app/apikey
+        private const val DEFAULT_GEMINI_KEY = ""
 
-        private fun decode(b64: String): String {
-            return String(android.util.Base64.decode(b64, android.util.Base64.DEFAULT), Charsets.UTF_8).trim()
-        }
+        // Weather and News default keys are also empty — app uses free alternatives
+        // (Open-Meteo for weather, Google News RSS for news) when these are blank
+        private const val DEFAULT_WEATHER_KEY = ""
+        private const val DEFAULT_NEWS_KEY = ""
     }
 
     // ── API Keys ────────────────────────────────────────────────
@@ -166,12 +167,29 @@ class SettingsManager @Inject constructor(
     // ── Helpers ─────────────────────────────────────────────────
 
     fun areApiKeysConfigured(): Boolean {
+        return isGeminiKeyValid()
+    }
+
+    /**
+     * Check if the Gemini API key appears to be valid.
+     * Valid keys start with "AIza" and are at least 30 characters long.
+     */
+    fun isGeminiKeyValid(): Boolean {
+        val key = getGeminiApiKey()
+        return key.isNotBlank() && key.startsWith("AIza") && key.length >= 30
+    }
+
+    /**
+     * Check if any Gemini API key is set (even if possibly invalid format).
+     * Used to determine whether to attempt AI calls at all.
+     */
+    fun isGeminiKeySet(): Boolean {
         return getGeminiApiKey().isNotBlank()
     }
 
     fun getMissingApiKeys(): List<String> {
         val missing = mutableListOf<String>()
-        if (getGeminiApiKey().isBlank()) missing.add("Gemini")
+        if (!isGeminiKeyValid()) missing.add("Gemini")
         if (getWeatherApiKey().isBlank()) missing.add("OpenWeatherMap")
         if (getNewsApiKey().isBlank()) missing.add("GNews")
         if (getPorcupineKey().isBlank()) missing.add("Porcupine")

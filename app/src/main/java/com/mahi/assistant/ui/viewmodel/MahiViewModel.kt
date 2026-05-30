@@ -90,6 +90,7 @@ data class DeviceUiState(
 
 data class SettingsUiState(
     val geminiKey: String = "",
+    val isGeminiKeyValid: Boolean = false,
     val porcupineKey: String = "",
     val weatherKey: String = "",
     val newsKey: String = "",
@@ -322,6 +323,7 @@ class MahiViewModel @Inject constructor(
     fun loadSettings() {
         _settingsState.value = SettingsUiState(
             geminiKey = settingsManager.getGeminiApiKey(),
+            isGeminiKeyValid = settingsManager.isGeminiKeyValid(),
             porcupineKey = settingsManager.getPorcupineKey(),
             weatherKey = settingsManager.getWeatherApiKey(),
             newsKey = settingsManager.getNewsApiKey(),
@@ -335,7 +337,7 @@ class MahiViewModel @Inject constructor(
         )
     }
 
-    fun updateGeminiKey(key: String) { settingsManager.setGeminiApiKey(key); _settingsState.value = _settingsState.value.copy(geminiKey = key, isSaved = false) }
+    fun updateGeminiKey(key: String) { settingsManager.setGeminiApiKey(key); _settingsState.value = _settingsState.value.copy(geminiKey = key, isGeminiKeyValid = key.startsWith("AIza") && key.length >= 30, isSaved = false) }
     fun updatePorcupineKey(key: String) { settingsManager.setPorcupineKey(key); _settingsState.value = _settingsState.value.copy(porcupineKey = key, isSaved = false) }
     fun updateWeatherKey(key: String) { settingsManager.setWeatherApiKey(key); _settingsState.value = _settingsState.value.copy(weatherKey = key, isSaved = false) }
     fun updateNewsKey(key: String) { settingsManager.setNewsApiKey(key); _settingsState.value = _settingsState.value.copy(newsKey = key, isSaved = false) }
@@ -1755,6 +1757,20 @@ class MahiViewModel @Inject constructor(
 
     private suspend fun fetchAiResponse(input: String): String {
         navigateTo("chat")
+
+        // Check if API key is configured before making any API call
+        if (!settingsManager.isGeminiKeyValid()) {
+            val keyHint = if (settingsManager.isGeminiKeySet()) {
+                "Your current API key appears to be invalid. Gemini API keys should start with 'AIza' and be at least 30 characters."
+            } else {
+                "No Gemini API key is configured."
+            }
+            return "I need a valid Gemini API key for AI chat. $keyHint " +
+                "Please go to Settings and enter your Gemini API key. " +
+                "You can get a free key from aistudio.google.com\n\n" +
+                "Note: Device commands like calling, SMS, flashlight, time, battery, weather, news, etc. still work without an API key!"
+        }
+
         return try {
             // Pass last 20 messages as context for memory
             val history = _messages.value.takeLast(20).map {
@@ -1766,7 +1782,15 @@ class MahiViewModel @Inject constructor(
             }
             aiEngine.chatWithMemory(input, history)
         } catch (e: Exception) {
-            "I'm having trouble connecting right now. Please check your internet connection."
+            // Check if the error is API-key related
+            val errorMsg = e.message ?: ""
+            if (errorMsg.contains("API key", ignoreCase = true) ||
+                errorMsg.contains("invalid", ignoreCase = true) ||
+                errorMsg.contains("401") || errorMsg.contains("403")) {
+                "I couldn't connect to Gemini. Your API key might be invalid. Please go to Settings and check your Gemini API key. Get a free key from aistudio.google.com"
+            } else {
+                "I'm having trouble connecting. Please check your internet connection or your Gemini API key in Settings."
+            }
         }
     }
 

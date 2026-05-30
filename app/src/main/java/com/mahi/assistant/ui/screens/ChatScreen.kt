@@ -87,12 +87,51 @@ fun ChatScreen(
                     Spacer(modifier = Modifier.height(4.dp))
                     // Show API key warning if not configured
                     val settingsState by viewModel.settingsState.collectAsState()
-                    if (settingsState.geminiKey.isBlank()) {
-                        Text(
-                            text = "Set your Gemini API key in Settings first!",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Amber,
-                        )
+                    if (!settingsState.isGeminiKeyValid) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Surface(
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                            color = Amber.copy(alpha = 0.12f),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Amber.copy(alpha = 0.4f))
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Warning,
+                                        contentDescription = "API Key Warning",
+                                        tint = Amber,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (settingsState.geminiKey.isBlank())
+                                            "Gemini API Key Required"
+                                        else
+                                            "Invalid API Key",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = Amber,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = if (settingsState.geminiKey.isBlank())
+                                        "AI chat requires a Gemini API key. Go to Settings to enter your key."
+                                    else
+                                        "Your API key should start with 'AIza'. Please update it in Settings.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Amber.copy(alpha = 0.8f)
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Get a free key at aistudio.google.com\nDevice commands (calls, SMS, flashlight, etc.) work without an API key!",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = TextTertiary,
+                                )
+                            }
+                        }
                     }
                 }
             }
