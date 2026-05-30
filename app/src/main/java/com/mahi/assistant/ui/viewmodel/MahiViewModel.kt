@@ -1813,9 +1813,9 @@ class MahiViewModel @Inject constructor(
             // Detect personal info patterns and save to memory
             // Name: "mera naam Aadarsh hai", "my name is Aadarsh"
             val namePatterns = listOf(
-                Regex("(?i)mera\s+naam\s+(\w+)\s+hai"),
-                Regex("(?i)my\s+name\s+is\s+(\w+)"),
-                Regex("(?i)i'?m\s+(\w+)(?:\s+and)?")
+                Regex("""(?i)mera\s+naam\s+(\w+)\s+hai"""),
+                Regex("""(?i)my\s+name\s+is\s+(\w+)"""),
+                Regex("""(?i)i'?m\s+(\w+)(?:\s+and)?""")
             )
             for (pattern in namePatterns) {
                 val match = pattern.find(lower)
@@ -1833,8 +1833,8 @@ class MahiViewModel @Inject constructor(
 
             // Location: "I live in Patna", "mai Patna me rehta hun"
             val locationPatterns = listOf(
-                Regex("(?i)(?:i\s+live\s+in|mai\s+)(\w+)(?:\s+me\s+reht|hun)?"),
-                Regex("(?i)mera\s+(?:ghar|city|shehar)\s+(\w+)\s+(?:hai|me)?")
+                Regex("""(?i)(?:i\s+live\s+in|mai\s+)(\w+)(?:\s+me\s+reht|hun)?"""),
+                Regex("""(?i)mera\s+(?:ghar|city|shehar)\s+(\w+)\s+(?:hai|me)?""")
             )
             for (pattern in locationPatterns) {
                 val match = pattern.find(lower)
@@ -1849,11 +1849,11 @@ class MahiViewModel @Inject constructor(
 
             // General memory: "yaad rakhna ...", "remember that ..."
             val memoryPatterns = listOf(
-                Regex("(?i)(?:yaad\s+rakhna?|remember\s+(?:that|this))?\s*(.+)")
+                Regex("""(?i)(?:yaad\s+rakhna?|remember\s+(?:that|this))?\s*(.+)""")
             )
             for (pattern in memoryPatterns) {
                 val match = pattern.find(input)
-                if (match != null && lower.contains("yaad") || lower.contains("remember")) {
+                if (match != null && (lower.contains("yaad") || lower.contains("remember"))) {
                     val fact = match.groupValues[1].trim()
                     if (fact.length > 2) {
                         userMemoryDao.insert(UserMemoryEntity(category = "fact", key = "memory_${System.currentTimeMillis()}", value = fact))
@@ -1864,8 +1864,8 @@ class MahiViewModel @Inject constructor(
 
             // Preference: "mujhe ... pasand hai", "I like ..."
             val likePatterns = listOf(
-                Regex("(?i)mujhe\s+(.+?)\s+pasand\s+hai"),
-                Regex("(?i)i\s+(?:like|love|prefer)\s+(.+?)(?:\.|$)")
+                Regex("""(?i)mujhe\s+(.+?)\s+pasand\s+hai"""),
+                Regex("""(?i)i\s+(?:like|love|prefer)\s+(.+?)(?:\.|$)""")
             )
             for (pattern in likePatterns) {
                 val match = pattern.find(lower)
