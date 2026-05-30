@@ -25,6 +25,13 @@ class VoiceRecognitionEngine(
     private val context: android.content.Context
 ) {
 
+    // Dynamic language — can be changed at runtime
+    var recognitionLanguage: String = "hi-IN,en-US"
+        set(value) {
+            field = value
+            Log.d("VoiceRecognition", "Recognition language changed to: $value")
+        }
+
     interface Callback {
         fun onResult(text: String) {}
         fun onPartial(text: String) {}
@@ -138,9 +145,12 @@ class VoiceRecognitionEngine(
 
         val recognizerIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hi-IN,en-US")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, recognitionLanguage)
+            // Also add as secondary language hint for better mixed-language recognition
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, recognitionLanguage)
+            putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, false)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
         }
 
         _partialResult.value = null

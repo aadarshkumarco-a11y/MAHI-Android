@@ -593,7 +593,88 @@ User input: """.trimIndent()
     private fun keywordFallback(input: String): IntentResult {
         val lower = input.lowercase()
 
+        // Check for Hindi/Devanagari text
+        val hasDevanagari = input.any { it in '\u0900'..'\u097F' }
+
         return when {
+            // ── HINDI DEVANAGARI PATTERNS (speech recognition output) ──
+            // These handle the case where Android SpeechRecognizer outputs Hindi in Devanagari script
+
+            // Emergency - Hindi
+            hasDevanagari && (input.contains("मदद") || input.contains("बचाओ") || input.contains("खतरा") || input.contains("संकट") || input.contains("मदद कर")) ->
+                IntentResult(IntentType.EMERGENCY_SOS, "emergency_sos")
+
+            // Weather - Hindi
+            hasDevanagari && (input.contains("मौसम") || input.contains("गर्मी") || input.contains("ठंड") || input.contains("बारिश") || input.contains("तापमान")) ->
+                IntentResult(IntentType.WEATHER, "get_weather")
+
+            // News - Hindi
+            hasDevanagari && (input.contains("खबर") || input.contains("समाचार") || input.contains("हेडलाइन") || input.contains("ब्रेकिंग")) ->
+                IntentResult(IntentType.NEWS, "get_news", mapOf("topic" to input))
+
+            // YouTube - Hindi
+            hasDevanagari && (input.contains("यूट्यूब") || input.contains("वीडियो") || input.contains("चलाओ")) ->
+                IntentResult(IntentType.YOUTUBE, "search_youtube", mapOf("query" to input))
+
+            // WhatsApp - Hindi
+            hasDevanagari && (input.contains("व्हाट्सएप") || input.contains("व्हाट्सअप") || input.contains("मैसेज भेज")) ->
+                IntentResult(IntentType.WHATSAPP, "send_whatsapp", mapOf("contact" to "", "message" to ""))
+
+            // Call - Hindi
+            hasDevanagari && (input.contains("कॉल") || input.contains("फोन") || input.contains("डायल")) ->
+                IntentResult(IntentType.CALL, "make_call", mapOf("contact" to input))
+
+            // SMS - Hindi
+            hasDevanagari && (input.contains("संदेश") || input.contains("एसएमएस") || input.contains("मैसेज")) ->
+                IntentResult(IntentType.SMS, "send_sms", mapOf("contact" to input))
+
+            // Alarm - Hindi
+            hasDevanagari && (input.contains("अलार्म") || input.contains("जगाओ") || input.contains("टाइम")) ->
+                IntentResult(IntentType.ALARM, "set_alarm")
+
+            // Time - Hindi
+            hasDevanagari && (input.contains("समय") || input.contains("बजे") || input.contains("कितने बजे")) ->
+                IntentResult(IntentType.TIME_DATE, "get_time")
+
+            // Date - Hindi
+            hasDevanagari && (input.contains("तारीख") || input.contains("दिन") || input.contains("आज")) ->
+                IntentResult(IntentType.TIME_DATE, "get_date")
+
+            // Camera/Photo - Hindi
+            hasDevanagari && (input.contains("कैमरा") || input.contains("फोटो") || input.contains("तस्वीर") || input.contains("सेल्फी")) ->
+                IntentResult(IntentType.CAMERA, "open_camera")
+
+            // Note/Memory - Hindi
+            hasDevanagari && (input.contains("याद") || input.contains("नोट") || input.contains("सहेज")) ->
+                IntentResult(IntentType.NOTE_SAVE, "save_note", mapOf("note" to input))
+
+            // Battery - Hindi
+            hasDevanagari && (input.contains("बैटरी") || input.contains("चार्ज")) ->
+                IntentResult(IntentType.BATTERY, "battery_status")
+
+            // Flashlight - Hindi
+            hasDevanagari && (input.contains("टॉर्च") || input.contains("रोशनी") || input.contains("जलाओ") || input.contains("बुझाओ")) ->
+                IntentResult(IntentType.DEVICE_CONTROL, "flashlight_on")
+
+            // Location - Hindi
+            hasDevanagari && (input.contains("कहां") || input.contains("लोकेशन") || input.contains("पता")) ->
+                IntentResult(IntentType.LOCATION, "get_location")
+
+            // Music - Hindi
+            hasDevanagari && (input.contains("गाना") || input.contains("संगीत") || input.contains("बजाओ")) ->
+                IntentResult(IntentType.MEDIA_CONTROL, "play", mapOf("action" to "play"))
+
+            // Expense - Hindi
+            hasDevanagari && (input.contains("खर्च") || input.contains("खर्चा")) ->
+                IntentResult(IntentType.EXPENSE_TRACK, if (input.contains("कितना") || input.contains("दिखाओ")) "read_expenses" else "add_expense",
+                    mapOf("description" to input))
+
+            // General Hindi greeting or question → treat as general chat (not error)
+            hasDevanagari && (input.contains("क्या") || input.contains("कैसे") || input.contains("कहां") || input.contains("कब") || input.contains("क्यों") || input.contains("कौन") || input.contains("है") || input.contains("हूं") || input.contains("हो") || input.contains("बताओ") || input.contains("करो") || input.contains("दिखाओ") || input.contains("भेजो") || input.contains("चाहिए")) ->
+                IntentResult(IntentType.GENERAL_CHAT, "hindi_general_chat")
+
+            // ── EXISTING HINGLISH/ENGLISH PATTERNS ──
+
             // Emergency SOS
             lower.contains("emergency") || lower.contains("sos") || lower.contains("help help") || lower.contains("madad") || lower.contains("bachao") || lower.contains("danger") ->
                 IntentResult(IntentType.EMERGENCY_SOS, "emergency_sos")

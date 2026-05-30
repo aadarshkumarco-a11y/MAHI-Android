@@ -87,50 +87,38 @@ fun ChatScreen(
                         color = TextSecondary,
                     )
                     Spacer(modifier = Modifier.height(4.dp))
-                    // Show API key warning if not configured
+                    // Show info if AI not configured — but web search still works!
                     val settingsState by viewModel.settingsState.collectAsState()
                     if (!settingsState.isGeminiKeyValid) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Surface(
                             shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
-                            color = Amber.copy(alpha = 0.12f),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Amber.copy(alpha = 0.4f))
+                            color = NeonGreen.copy(alpha = 0.08f),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, NeonGreen.copy(alpha = 0.3f))
                         ) {
                             Column(
                                 modifier = Modifier.padding(12.dp)
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Icon(
-                                        imageVector = Icons.Filled.Warning,
-                                        contentDescription = "API Key Warning",
-                                        tint = Amber,
+                                        imageVector = Icons.Filled.CheckCircle,
+                                        contentDescription = "Web Search Active",
+                                        tint = NeonGreen,
                                         modifier = Modifier.size(16.dp)
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = if (settingsState.geminiKey.isBlank())
-                                            "Gemini API Key Required"
-                                        else
-                                            "Invalid API Key",
+                                        text = "Web Search Active",
                                         style = MaterialTheme.typography.labelMedium,
-                                        color = Amber,
+                                        color = NeonGreen,
                                         fontWeight = FontWeight.Bold
                                     )
                                 }
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = if (settingsState.geminiKey.isBlank())
-                                        "AI chat requires a Gemini API key. Go to Settings to enter your key."
-                                    else
-                                        "Your API key should start with 'AIza'. Please update it in Settings.",
+                                    text = "I can answer questions using Wikipedia + Web Search. Add a Gemini API key in Settings for smarter AI responses!",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = Amber.copy(alpha = 0.8f)
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = "Get a free key at aistudio.google.com\nDevice commands (calls, SMS, flashlight, etc.) work without an API key!",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = TextTertiary,
+                                    color = NeonGreen.copy(alpha = 0.7f),
                                 )
                             }
                         }

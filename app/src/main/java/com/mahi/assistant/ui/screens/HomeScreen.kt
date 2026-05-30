@@ -89,14 +89,14 @@ fun HomeScreen(
                 color = TextSecondary,
             )
 
-            // ── API Key Warning Banner ───────────────────────────
+            // ── Info Banner — Web search always available ────
             if (!settingsState.isGeminiKeyValid && settingsState.grokKey.isBlank()) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
-                    color = Amber.copy(alpha = 0.15f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Amber.copy(alpha = 0.5f))
+                    color = NeonGreen.copy(alpha = 0.08f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, NeonGreen.copy(alpha = 0.3f))
                 ) {
                     Row(
                         modifier = Modifier
@@ -105,29 +105,23 @@ fun HomeScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Icon(
-                            imageVector = Icons.Filled.Warning,
-                            contentDescription = "API Key Warning",
-                            tint = Amber,
+                            imageVector = Icons.Filled.CheckCircle,
+                            contentDescription = "Web Search Available",
+                            tint = NeonGreen,
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = if (settingsState.geminiKey.isBlank())
-                                    "Gemini API Key Required"
-                                else
-                                    "Invalid Gemini API Key",
+                                text = "Web Search Active",
                                 style = MaterialTheme.typography.labelMedium,
-                                color = Amber,
+                                color = NeonGreen,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = if (settingsState.geminiKey.isBlank())
-                                    "Go to Settings to enter your key. Free key at aistudio.google.com"
-                                else
-                                    "Your key should start with 'AIza'. Update it in Settings.",
+                                text = "Wikipedia + DuckDuckGo always work. Add Gemini key in Settings for smarter AI.",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = Amber.copy(alpha = 0.8f)
+                                color = NeonGreen.copy(alpha = 0.7f)
                             )
                         }
                     }
@@ -401,8 +395,8 @@ private fun StatusIndicators(isAiConfigured: Boolean = false) {
         horizontalArrangement = Arrangement.SpaceEvenly,
     ) {
         StatusDot(label = "Voice Ready", color = NeonGreen)
-        StatusDot(label = if (isAiConfigured) "AI Online" else "AI Offline", color = if (isAiConfigured) NeonCyan else Amber)
-        StatusDot(label = if (isAiConfigured) "Gemini+Grok" else "No AI Key", color = if (isAiConfigured) NeonGreen else Amber)
+        StatusDot(label = if (isAiConfigured) "AI Online" else "Web Search", color = if (isAiConfigured) NeonCyan else NeonGreen)
+        StatusDot(label = if (isAiConfigured) "Gemini+Grok" else "Wikipedia+DDG", color = NeonGreen)
         StatusDot(label = "Device Control", color = ElectricPurple)
     }
 }

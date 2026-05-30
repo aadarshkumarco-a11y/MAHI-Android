@@ -370,6 +370,22 @@ class MahiViewModel @Inject constructor(
         _currentLanguage.value = newLang
         settingsManager.setLanguage(newLang)
         _settingsState.value = _settingsState.value.copy(language = newLang)
+        // Update TTS language to match
+        try {
+            if (newLang == "hi") {
+                val hindiLocale = java.util.Locale("hi", "IN")
+                val result = ttsEngine.setLanguage(hindiLocale)
+                if (result == android.speech.tts.TextToSpeech.LANG_MISSING_DATA || result == android.speech.tts.TextToSpeech.LANG_NOT_SUPPORTED) {
+                    ttsEngine.setLanguage(java.util.Locale("en", "IN"))
+                }
+            } else {
+                ttsEngine.setLanguage(java.util.Locale.US)
+            }
+        } catch (_: Exception) { }
+        // Update speech recognition language
+        try {
+            voiceRecognition.recognitionLanguage = if (newLang == "hi") "hi-IN,en-US" else "en-US,hi-IN"
+        } catch (_: Exception) { }
     }
     fun saveAllSettings() { _settingsState.value = _settingsState.value.copy(isSaved = true) }
 
@@ -2142,9 +2158,13 @@ class MahiViewModel @Inject constructor(
     private suspend fun fetchAiResponse(input: String): String {
         navigateTo("chat")
 
+        // Detect language for better response
+        val isHindi = com.mahi.assistant.api.WebSearchService.isHindiText(input)
+        val detectedLang = if (isHindi) "hi" else _currentLanguage.value
+
         if (!aiEngine.isConfigured()) {
             // No AI key — use web search directly!
-            return tryWebSearch(input)
+            return tryWebSearch(input, detectedLang)
         }
 
         // Try to extract and save user memory from this input
@@ -2170,33 +2190,86 @@ class MahiViewModel @Inject constructor(
                 )
             } else null
 
-            val fullHistory = if (contextPrefix != null) listOf(contextPrefix) + history else history
+            // Add language context hint for the AI
+            val langHint = com.mahi.assistant.ai.ChatMessage(
+                role = com.mahi.assistant.ai.ChatMessage.ROLE_MODEL,
+                content = if (isHindi) {
+                    "[System: User is speaking in Hindi/Devanagari. Respond in Hinglish (Hindi written in English script) naturally. Example: 'Haan main aapki madad kar sakta hoon.']"
+                } else if (detectedLang == "hi") {
+                    "[System: User prefers Hindi/Hinglish. Respond in Hinglish naturally.]"
+                } else {
+                    ""
+                },
+                timestamp = 0L
+            )
+
+            val fullHistory = listOfNotNull(langHint.takeIf { it.content.isNotBlank() }, contextPrefix) + history
             val response = aiEngine.chatWithMemory(input, fullHistory)
             // If the response looks like an error, try web search
-            if (response.contains("trouble connecting") || response.contains("check your internet") || response.contains("API key")) {
-                tryWebSearch(input)
+            if (response.contains("trouble connecting") || response.contains("check your internet") ||
+                response.contains("API key") || response.contains("having trouble") ||
+                response.contains("No AI backend") || response.contains("error") ||
+                response == "NO_AI_CONFIGURED" || response == "AI_BACKENDS_FAILED") {
+                tryWebSearch(input, detectedLang)
             } else {
                 response
             }
         } catch (e: Exception) {
-            tryWebSearch(input)
+            tryWebSearch(input, detectedLang)
         }
     }
 
     /**
-     * ULTIMATE FALLBACK: Search the web when AI APIs fail.
-     * Uses DuckDuckGo (free, no API key needed).
+     * ULTIMATE FALLBACK: Multi-source web search when AI APIs fail.
+     * NEVER returns 'I'm having trouble' — always provides something useful.
+     * Uses: Wikipedia → DuckDuckGo → Contextual help
      */
-    private suspend fun tryWebSearch(query: String): String {
+    private suspend fun tryWebSearch(query: String, language: String = "en"): String {
         return try {
             val searchResult = com.mahi.assistant.api.WebSearchService.search(query)
-            if (searchResult.isNotBlank() && !searchResult.contains("couldn't find") && !searchResult.contains("couldn't search")) {
+            if (searchResult.isNotBlank() && searchResult.length > 20 &&
+                !searchResult.contains("couldn't find") && !searchResult.contains("couldn't search")) {
                 searchResult
             } else {
-                "I'm having trouble right now. Please try again in a moment."
+                // Even web search failed — provide helpful contextual response
+                val isHindi = com.mahi.assistant.api.WebSearchService.isHindiText(query)
+                val q = query.lowercase()
+
+                // Try to give useful response based on query type
+                when {
+                    q.contains("weather") || q.contains("mausam") || q.contains("मौसम") -> {
+                        val city = settingsManager.getDefaultCity()
+                        if (isHindi) "$city ka mausam jaanne ke liye 'mausam batao' bolo."
+                        else "Say 'weather' to check the weather for $city."
+                    }
+                    q.contains("news") || q.contains("khabar") || q.contains("खबर") -> {
+                        if (isHindi) "Latest khabar jaanne ke liye 'aaj ki khabar' bolo."
+                        else "Say 'news' to get the latest headlines."
+                    }
+                    q.contains("call") || q.contains("कॉल") -> {
+                        if (isHindi) "Call karne ke liye contact ka naam bolo, jaise 'call Ayush karo'."
+                        else "Say a contact name to make a call, like 'call Ayush'."
+                    }
+                    q.contains("time") || q.contains("samay") || q.contains("समय") -> {
+                        val time = java.text.SimpleDateFormat("hh:mm a", java.util.Locale.getDefault()).format(java.util.Date())
+                        if (isHindi) "Abhi ka time $time hai."
+                        else "Current time is $time."
+                    }
+                    q.contains("date") || q.contains("तारीख") -> {
+                        val date = java.text.SimpleDateFormat("dd MMMM yyyy, EEEE", java.util.Locale.getDefault()).format(java.util.Date())
+                        if (isHindi) "Aaj ki date $date hai."
+                        else "Today's date is $date."
+                    }
+                    else -> {
+                        if (isHindi) "Main abhi is baare me detail nahi de pa raha, lekin aap Google par search kar sakte hain. Kya main kisi aur cheez me madad karoon?"
+                        else "I don't have specific info on that right now. You can search Google for more details. Can I help with anything else?"
+                    }
+                }
             }
         } catch (e: Exception) {
-            "I'm having trouble right now. Please try again in a moment."
+            val isHindi = com.mahi.assistant.api.WebSearchService.isHindiText(query)
+            if (isHindi) "Internet connection check karo aur dobara try karo. Main device commands jaise call, SMS, flashlight abhi bhi kar sakta hoon!"
+            else "Please check your internet connection and try again. Device commands like calls, SMS, and flashlight still work!"
         }
     }
 
