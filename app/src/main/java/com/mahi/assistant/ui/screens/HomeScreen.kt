@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.mahi.assistant.data.model.AssistantState
 import com.mahi.assistant.ui.components.*
 import com.mahi.assistant.ui.theme.*
@@ -72,7 +73,7 @@ fun HomeScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             // ── Top Bar ─────────────────────────────────────────
-            TopBar(currentTime = currentTime)
+            TopBar(currentTime = currentTime, viewModel = viewModel)
 
             Spacer(modifier = Modifier.height(24.dp))
 
@@ -220,7 +221,9 @@ fun HomeScreen(
 // ═══════════════════════════════════════════════════════════════
 
 @Composable
-private fun TopBar(currentTime: String) {
+private fun TopBar(currentTime: String, viewModel: MahiViewModel) {
+    val currentLanguage by viewModel.currentLanguage.collectAsState()
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -252,8 +255,18 @@ private fun TopBar(currentTime: String) {
             color = TextSecondary,
         )
 
-        // Status dot
+        // Language toggle + Status dot
         Row(verticalAlignment = Alignment.CenterVertically) {
+            // Language toggle button
+            TextButton(onClick = { viewModel.toggleLanguage() }) {
+                Text(
+                    text = if (currentLanguage == "en") "HI" else "EN",
+                    color = NeonCyan,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
             Box(
                 modifier = Modifier
                     .size(8.dp)

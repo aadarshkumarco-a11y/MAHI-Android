@@ -16,6 +16,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.mahi.assistant.data.model.AssistantState
 import com.mahi.assistant.data.model.ChatMessage
 import com.mahi.assistant.data.model.MessageRole
@@ -52,7 +53,7 @@ fun ChatScreen(
             .navigationBarsPadding(),
     ) {
         // ── Top Bar ─────────────────────────────────────────────
-        ChatTopBar(onBack = onBack, assistantState = assistantState)
+        ChatTopBar(onBack = onBack, assistantState = assistantState, viewModel = viewModel)
 
         // ── Welcome message if no messages ──────────────────────
         if (messages.isEmpty()) {
@@ -187,7 +188,10 @@ fun ChatScreen(
 private fun ChatTopBar(
     onBack: () -> Unit,
     assistantState: AssistantState,
+    viewModel: MahiViewModel,
 ) {
+    val currentLanguage by viewModel.currentLanguage.collectAsState()
+
     TopAppBar(
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -224,6 +228,17 @@ private fun ChatTopBar(
                     imageVector = Icons.Filled.ArrowBack,
                     contentDescription = "Back",
                     tint = NeonCyan,
+                )
+            }
+        },
+        actions = {
+            // Language toggle button
+            TextButton(onClick = { viewModel.toggleLanguage() }) {
+                Text(
+                    text = if (currentLanguage == "en") "HI" else "EN",
+                    color = NeonCyan,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
                 )
             }
         },

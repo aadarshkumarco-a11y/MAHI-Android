@@ -355,6 +355,63 @@ fun SettingsScreen(
                             },
                         )
 
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Language Toggle
+                        val currentLanguage by viewModel.currentLanguage.collectAsState()
+                        Text(
+                            text = "LANGUAGE",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextTertiary,
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            FilterChip(
+                                selected = currentLanguage == "en",
+                                onClick = { viewModel.updateLanguage("en") },
+                                label = {
+                                    Text(
+                                        text = "English",
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = NeonCyan.copy(alpha = 0.15f),
+                                    selectedLabelColor = NeonCyan,
+                                    containerColor = DarkPanelLight,
+                                    labelColor = TextTertiary,
+                                ),
+                                border = FilterChipDefaults.filterChipBorder(
+                                    borderColor = DarkPanelBorder,
+                                    selectedBorderColor = NeonCyan.copy(alpha = 0.5f),
+                                    borderWidth = 1.dp,
+                                ),
+                            )
+                            FilterChip(
+                                selected = currentLanguage == "hi",
+                                onClick = { viewModel.updateLanguage("hi") },
+                                label = {
+                                    Text(
+                                        text = "Hindi",
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = NeonCyan.copy(alpha = 0.15f),
+                                    selectedLabelColor = NeonCyan,
+                                    containerColor = DarkPanelLight,
+                                    labelColor = TextTertiary,
+                                ),
+                                border = FilterChipDefaults.filterChipBorder(
+                                    borderColor = DarkPanelBorder,
+                                    selectedBorderColor = NeonCyan.copy(alpha = 0.5f),
+                                    borderWidth = 1.dp,
+                                ),
+                            )
+                        }
+
                         Spacer(modifier = Modifier.height(16.dp))
 
                         // Default City

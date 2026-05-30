@@ -7,7 +7,6 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.hardware.camera2.CameraManager
-import android.location.Geocoder
 import android.location.LocationManager
 import android.media.AudioManager
 import android.net.Uri
@@ -108,7 +107,8 @@ data class SettingsUiState(
     val floatingAssistant: Boolean = false,
     val isSaved: Boolean = false,
     val defaultCity: String = "New Delhi",
-    val continuousMode: Boolean = false
+    val continuousMode: Boolean = false,
+    val language: String = "en"
 )
 
 @HiltViewModel
@@ -168,6 +168,10 @@ class MahiViewModel @Inject constructor(
     // Continuous mode state
     private val _continuousMode = MutableStateFlow(false)
     val continuousMode: StateFlow<Boolean> = _continuousMode.asStateFlow()
+
+    // Language state
+    private val _currentLanguage = MutableStateFlow(settingsManager.getLanguage())
+    val currentLanguage: StateFlow<String> = _currentLanguage.asStateFlow()
 
     private var processingJob: Job? = null
 
@@ -343,7 +347,8 @@ class MahiViewModel @Inject constructor(
             autoStartOnBoot = settingsManager.getAutoStartOnBoot(),
             floatingAssistant = settingsManager.getFloatingAssistant(),
             defaultCity = settingsManager.getDefaultCity(),
-            continuousMode = settingsManager.isContinuousMode()
+            continuousMode = settingsManager.isContinuousMode(),
+            language = settingsManager.getLanguage()
         )
     }
 
@@ -359,6 +364,13 @@ class MahiViewModel @Inject constructor(
     fun updateFloatingAssistant(enabled: Boolean) { settingsManager.setFloatingAssistant(enabled); _settingsState.value = _settingsState.value.copy(floatingAssistant = enabled) }
     fun updateDefaultCity(city: String) { settingsManager.setDefaultCity(city); _settingsState.value = _settingsState.value.copy(defaultCity = city) }
     fun updateContinuousMode(enabled: Boolean) { settingsManager.setContinuousMode(enabled); _continuousMode.value = enabled; _settingsState.value = _settingsState.value.copy(continuousMode = enabled) }
+    fun updateLanguage(lang: String) { settingsManager.setLanguage(lang); _currentLanguage.value = lang; _settingsState.value = _settingsState.value.copy(language = lang) }
+    fun toggleLanguage() {
+        val newLang = if (_currentLanguage.value == "en") "hi" else "en"
+        _currentLanguage.value = newLang
+        settingsManager.setLanguage(newLang)
+        _settingsState.value = _settingsState.value.copy(language = newLang)
+    }
     fun saveAllSettings() { _settingsState.value = _settingsState.value.copy(isSaved = true) }
 
     fun navigateTo(route: String) { _currentRoute.value = route }
@@ -462,23 +474,33 @@ class MahiViewModel @Inject constructor(
     private fun launchYouTube(query: String): String {
         return try {
             if (query.isNotBlank()) {
-                // Try YouTube app search first
+                // Try to play directly in YouTube app
                 try {
-                    val intent = Intent(Intent.ACTION_SEARCH).apply {
+                    val searchIntent = Intent(Intent.ACTION_SEARCH).apply {
                         component = ComponentName("com.google.android.youtube", "com.google.android.youtube.SearchActivity")
                         putExtra("query", query)
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
-                    appContext.startActivity(intent)
+                    appContext.startActivity(searchIntent)
                     return "Playing $query on YouTube."
                 } catch (_: ActivityNotFoundException) { }
 
-                // Fallback: open YouTube with web search URL
-                val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=${URLEncoder.encode(query, "UTF-8")}")).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                // Fallback: open YouTube with search results
+                try {
+                    val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=${URLEncoder.encode(query, "UTF-8")}")).apply {
+                        setPackage("com.google.android.youtube")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    appContext.startActivity(webIntent)
+                    "Playing $query on YouTube."
+                } catch (_: Exception) {
+                    // Browser fallback
+                    val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=${URLEncoder.encode(query, "UTF-8")}")).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    appContext.startActivity(webIntent)
+                    "Searching YouTube for $query."
                 }
-                appContext.startActivity(webIntent)
-                "Searching YouTube for $query."
             } else {
                 val launchIntent = appContext.packageManager.getLaunchIntentForPackage("com.google.android.youtube")
                 if (launchIntent != null) {
@@ -696,26 +718,38 @@ class MahiViewModel @Inject constructor(
 
         return try {
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                val geocoder = Geocoder(appContext, Locale.getDefault())
-                val addresses = geocoder.getFromLocationName(cityName, 1)
-                if (addresses.isNullOrEmpty()) {
+                // Use Open-Meteo Geocoding API instead of Android Geocoder (works on ALL devices!)
+                val geocodingUrl = "https://geocoding-api.open-meteo.com/v1/search?name=${URLEncoder.encode(cityName, "UTF-8")}&count=1&language=en"
+                val geocodingClient = okhttp3.OkHttpClient.Builder().connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS).build()
+                val geocodingRequest = okhttp3.Request.Builder().url(geocodingUrl).build()
+                val geocodingResponse = geocodingClient.newCall(geocodingRequest).execute()
+                val geocodingBody = geocodingResponse.body?.string()
+
+                if (geocodingBody.isNullOrBlank()) {
                     _weatherState.value = _weatherState.value.copy(isLoading = false)
                     return@withContext "I couldn't find $cityName. Try a different city name."
                 }
-                val address = addresses[0]
-                val lat = address.latitude
-                val lon = address.longitude
-                val resolvedCity = address.locality ?: cityName
+
+                val gson = com.google.gson.Gson()
+                val geoResult = gson.fromJson(geocodingBody, GeocodingResult::class.java)
+                val geoData = geoResult.results?.firstOrNull()
+
+                if (geoData == null) {
+                    _weatherState.value = _weatherState.value.copy(isLoading = false)
+                    return@withContext "I couldn't find $cityName. Try a different city name."
+                }
+
+                val lat = geoData.latitude
+                val lon = geoData.longitude
+                val resolvedCity = geoData.name ?: cityName
 
                 // Call Open-Meteo API (completely free!)
                 val openMeteoUrl = "https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&timezone=auto"
-                val client = okhttp3.OkHttpClient.Builder().connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS).build()
-                val request = okhttp3.Request.Builder().url(openMeteoUrl).build()
-                val response = client.newCall(request).execute()
-                val body = response.body?.string()
+                val weatherRequest = okhttp3.Request.Builder().url(openMeteoUrl).build()
+                val weatherResponse = geocodingClient.newCall(weatherRequest).execute()
+                val body = weatherResponse.body?.string()
 
                 if (body != null) {
-                    val gson = com.google.gson.Gson()
                     val weatherData = gson.fromJson(body, OpenMeteoResponse::class.java)
                     val current = weatherData.current
 
@@ -736,7 +770,7 @@ class MahiViewModel @Inject constructor(
                             isLoading = false
                         )
                         navigateTo("weather")
-                        "Weather in $resolvedCity: $temp degrees, $desc. Feels like $feelsLike degrees. Humidity $humidity%. Wind speed ${String.format("%.1f", windSpeed)} km/h."
+                        "$resolvedCity ka mausam: $temp degree, $desc. Feels like $feelsLike degree. Humidity $humidity%. Wind speed ${String.format("%.1f", windSpeed)} km/h."
                     } else {
                         fallbackWeather(cityName)
                     }
@@ -803,6 +837,15 @@ class MahiViewModel @Inject constructor(
         val wind_speed_10m: Double? = null
     )
 
+    // Open-Meteo Geocoding response model
+    private data class GeocodingResult(val results: List<GeocodingItem>? = null)
+    private data class GeocodingItem(
+        val name: String? = null,
+        val latitude: Double = 0.0,
+        val longitude: Double = 0.0,
+        val country: String? = null
+    )
+
     // ══════════════════════════════════════════════════════════════════════
     // NEWS — FIXED: RSS fallback (FREE, no API key!) + GNews API
     // ══════════════════════════════════════════════════════════════════════
@@ -822,7 +865,18 @@ class MahiViewModel @Inject constructor(
         val apiResult = fetchNewsFromApi(topic, maxArticles)
         if (apiResult != null) return apiResult
 
-        return rssResult  // Return RSS error message
+        // Final fallback: web search
+        return try {
+            val searchResult = com.mahi.assistant.api.WebSearchService.search("latest news $topic")
+            if (searchResult.isNotBlank() && !searchResult.contains("couldn't find")) {
+                _newsState.value = _newsState.value.copy(isLoading = false)
+                searchResult
+            } else {
+                "I couldn't fetch news right now. Please check your internet connection."
+            }
+        } catch (e: Exception) {
+            "I couldn't fetch news right now. Please try again later."
+        }
     }
 
     /**
@@ -2085,9 +2139,9 @@ class MahiViewModel @Inject constructor(
     private suspend fun fetchAiResponse(input: String): String {
         navigateTo("chat")
 
-        // Check if ANY AI backend is configured (Gemini OR Grok)
         if (!aiEngine.isConfigured()) {
-            return "I need an AI API key to respond. Please go to Settings and enter your Gemini API key (free from aistudio.google.com) or your Grok API key.\n\nNote: Device commands like calling, SMS, flashlight, time, battery, weather, news, etc. still work without an API key!"
+            // No AI key — use web search directly!
+            return tryWebSearch(input)
         }
 
         // Try to extract and save user memory from this input
@@ -2114,16 +2168,32 @@ class MahiViewModel @Inject constructor(
             } else null
 
             val fullHistory = if (contextPrefix != null) listOf(contextPrefix) + history else history
-            aiEngine.chatWithMemory(input, fullHistory)
-        } catch (e: Exception) {
-            val errorMsg = e.message ?: ""
-            if (errorMsg.contains("API key", ignoreCase = true) ||
-                errorMsg.contains("invalid", ignoreCase = true) ||
-                errorMsg.contains("401") || errorMsg.contains("403")) {
-                "I couldn't connect to my AI backends. Please check your API keys in Settings."
+            val response = aiEngine.chatWithMemory(input, fullHistory)
+            // If the response looks like an error, try web search
+            if (response.contains("trouble connecting") || response.contains("check your internet") || response.contains("API key")) {
+                tryWebSearch(input)
             } else {
-                "I'm having trouble connecting. Please check your internet connection or API keys in Settings."
+                response
             }
+        } catch (e: Exception) {
+            tryWebSearch(input)
+        }
+    }
+
+    /**
+     * ULTIMATE FALLBACK: Search the web when AI APIs fail.
+     * Uses DuckDuckGo (free, no API key needed).
+     */
+    private suspend fun tryWebSearch(query: String): String {
+        return try {
+            val searchResult = com.mahi.assistant.api.WebSearchService.search(query)
+            if (searchResult.isNotBlank() && !searchResult.contains("couldn't find") && !searchResult.contains("couldn't search")) {
+                searchResult
+            } else {
+                "I'm having trouble right now. Please try again in a moment."
+            }
+        } catch (e: Exception) {
+            "I'm having trouble right now. Please try again in a moment."
         }
     }
 

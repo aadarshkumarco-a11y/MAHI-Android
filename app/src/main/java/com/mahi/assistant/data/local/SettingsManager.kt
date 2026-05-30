@@ -42,6 +42,7 @@ class SettingsManager @Inject constructor(
         const val KEY_DEFAULT_CITY = "default_city"
         const val KEY_SAVED_NOTES = "saved_notes"
         const val KEY_CONTINUOUS_MODE = "continuous_mode"
+        const val KEY_LANGUAGE = "app_language"  // "en" or "hi"
 
         // No default Gemini key — user must provide their own valid key.
         // Valid Gemini API keys start with "AIza" and are at least 30 characters long.
@@ -179,6 +180,11 @@ class SettingsManager @Inject constructor(
 
     fun isContinuousMode(): Boolean = prefs.getBoolean(KEY_CONTINUOUS_MODE, false)
     fun setContinuousMode(enabled: Boolean) = prefs.edit().putBoolean(KEY_CONTINUOUS_MODE, enabled).commit()
+
+    // ── Language Preference ──────────────────────────────────────
+
+    fun getLanguage(): String = prefs.getString(KEY_LANGUAGE, "en") ?: "en"
+    fun setLanguage(lang: String) = prefs.edit().putString(KEY_LANGUAGE, lang).commit()
 
     // ── Helpers ─────────────────────────────────────────────────
 
