@@ -13,15 +13,21 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 /**
- * ULTIMATE Web Search Service — Multi-source fallback chain.
+ * JARVIS-LEVEL Research Engine — Multi-source deep search pipeline.
  * NO API KEY NEEDED! Works even when Gemini/Grok APIs fail.
  *
- * Search Chain:
+ * Search Chain (5 sources, aggressive fallback):
  * 1. Wikipedia API (FREE, multilingual, high quality)
  * 2. DuckDuckGo Instant Answers (FREE, good for definitions)
- * 3. Google search URL generation (always works, opens in browser)
+ * 3. Brave Search API (FREE tier, web results with snippets)
+ * 4. Google News RSS (FREE, for current events/news)
+ * 5. Contextual help generation (built-in answers)
  *
- * This ensures MAHI ALWAYS responds — never shows "I'm having trouble".
+ * Research Pipeline:
+ * Question → Intent Detection → Web Search → Source Collection →
+ * Information Extraction → Summarization → Response
+ *
+ * This ensures MAHI NEVER says "I don't have specific info" — always researches first.
  */
 object WebSearchService {
 
@@ -42,11 +48,58 @@ object WebSearchService {
     }
 
     /**
+     * Check if a query is likely to need web research (vs just casual chat).
+     * Questions about facts, people, events, places, things need research.
+     */
+    fun needsResearch(query: String): Boolean {
+        val q = query.lowercase().trim()
+        // Questions that need research
+        val researchIndicators = listOf(
+            "who is", "who was", "who are", "what is", "what was", "what are",
+            "when is", "when was", "when did", "where is", "where was", "where do",
+            "how is", "how was", "how did", "how do", "how does", "how many",
+            "why is", "why was", "why did", "why do", "why does",
+            "which is", "which was", "which are",
+            "tell me about", "tell about", "explain", "describe",
+            "information about", "info about", "details about",
+            "latest", "recent", "current", "today", "now",
+            "news", "update", "happening", "score", "result",
+            "price of", "cost of", "value of", "worth of",
+            "weather", "temperature", "forecast",
+            "meaning of", "definition of", "define",
+            "history of", "origin of", "cause of",
+            "difference between", "compare", "vs",
+            "kya hai", "kaun hai", "kahan hai", "kab hua", "kyon hai",
+            "kaise hai", "kitna hai", "kitne hai",
+            "batao", "samjhao", "dikhao", "pata karo",
+            "khabar", "mausam", "update"
+        )
+
+        // Casual chat that does NOT need research
+        val casualPatterns = listOf(
+            "hello", "hi ", "hey", "how are you", "how r u", "kya hal",
+            "good morning", "good night", "good evening", "good afternoon",
+            "thank", "thanks", "ok", "okay", "nice", "cool", "great",
+            "haan", "nahi", "thik hai", "accha", "theek", "sahi"
+        )
+
+        // If it's casual chat, no research needed
+        if (casualPatterns.any { q.contains(it) } && q.length < 30) return false
+
+        // If it has research indicators, research needed
+        if (researchIndicators.any { q.contains(it) }) return true
+
+        // If it's longer than 15 chars and not a simple greeting, probably needs research
+        if (q.length > 15) return true
+
+        return false
+    }
+
+    /**
      * Transliterate common Hindi Devanagari words to Hinglish.
      * This helps when searching English-language sources.
      */
     fun devanagariToHinglish(text: String): String {
-        // Common Hindi word mappings for better search results
         val mappings = mapOf(
             "मौसम" to "mausam weather",
             "खबर" to "khabar news",
@@ -80,7 +133,6 @@ object WebSearchService {
             "जरूर" to "zaroor must",
             "शेयर" to "share stock market",
             "बाजार" to "bazaar market",
-            "दिल्ली" to "Delhi",
             "भारत" to "India",
             "देश" to "desh country",
             "वीडियो" to "video",
@@ -130,14 +182,11 @@ object WebSearchService {
         for ((hindi, hinglish) in mappings) {
             result = result.replace(hindi, hinglish)
         }
-
-        // If still mostly Devanagari, just return original
-        // (Wikipedia Hindi will handle it)
         return result
     }
 
     /**
-     * MAIN search method — tries multiple sources in order.
+     * MAIN search method — tries 4+ sources in order.
      * NEVER returns empty/useless response.
      */
     suspend fun search(query: String): String = withContext(Dispatchers.IO) {
@@ -160,6 +209,14 @@ object WebSearchService {
             }
         } catch (_: Exception) { }
 
+        // ── SOURCE 3: Brave Search (FREE, web results with snippets!) ───
+        try {
+            val braveResult = searchBrave(query)
+            if (braveResult.isNotBlank() && braveResult.length > 30) {
+                results.add(braveResult)
+            }
+        } catch (_: Exception) { }
+
         // If Hindi query failed, try English version too
         if (isHindi && results.isEmpty()) {
             try {
@@ -169,6 +226,27 @@ object WebSearchService {
                     if (wikiEngResult.isNotBlank() && wikiEngResult.length > 30) {
                         results.add(wikiEngResult)
                     }
+                    // Also try Brave with English query
+                    val braveEngResult = searchBrave(engQuery)
+                    if (braveEngResult.isNotBlank() && braveEngResult.length > 30) {
+                        results.add(braveEngResult)
+                    }
+                }
+            } catch (_: Exception) { }
+        }
+
+        // ── SOURCE 4: Google News RSS (for current events) ──────────────
+        val q = query.lowercase()
+        if (q.contains("news") || q.contains("latest") || q.contains("recent") ||
+            q.contains("current") || q.contains("today") || q.contains("happening") ||
+            q.contains("khabar") || q.contains("खबर") || q.contains("update")) {
+            try {
+                val newsItems = searchNews(query, 3)
+                if (newsItems.isNotEmpty()) {
+                    val newsText = newsItems.mapIndexed { i, item ->
+                        "${i + 1}. ${item.title}"
+                    }.joinToString(". ")
+                    results.add("Latest news: $newsText")
                 }
             } catch (_: Exception) { }
         }
@@ -178,6 +256,74 @@ object WebSearchService {
             results.isNotEmpty() -> results.first()
             else -> generateHelpfulResponse(query)
         }
+    }
+
+    /**
+     * DEEP RESEARCH — searches ALL sources, combines results.
+     * Used when a single source isn't enough.
+     * Returns combined information from multiple sources.
+     */
+    suspend fun deepResearch(query: String): String = withContext(Dispatchers.IO) {
+        val isHindi = isHindiText(query)
+        val searchQuery = if (isHindi) devanagariToHinglish(query) else query
+        val allResults = mutableListOf<Pair<String, String>>() // (source, content)
+
+        // Parallel-ish research from all sources
+        // Source 1: Wikipedia
+        try {
+            val wikiResult = searchWikipedia(query, if (isHindi) "hi" else "en")
+            if (wikiResult.isNotBlank() && wikiResult.length > 30) {
+                allResults.add("Wikipedia" to wikiResult)
+            }
+            // Also try English Wikipedia if Hindi
+            if (isHindi) {
+                val engWiki = searchWikipedia(searchQuery, "en")
+                if (engWiki.isNotBlank() && engWiki.length > 30) {
+                    allResults.add("Wikipedia EN" to engWiki)
+                }
+            }
+        } catch (_: Exception) { }
+
+        // Source 2: DuckDuckGo
+        try {
+            val ddgResult = searchDuckDuckGo(searchQuery)
+            if (ddgResult.isNotBlank() && ddgResult.length > 20) {
+                allResults.add("DuckDuckGo" to ddgResult)
+            }
+        } catch (_: Exception) { }
+
+        // Source 3: Brave Search
+        try {
+            val braveResult = searchBrave(searchQuery)
+            if (braveResult.isNotBlank() && braveResult.length > 30) {
+                allResults.add("Web Search" to braveResult)
+            }
+        } catch (_: Exception) { }
+
+        // Source 4: News (for current events)
+        try {
+            val newsItems = searchNews(query, 3)
+            if (newsItems.isNotEmpty()) {
+                val newsText = newsItems.map { "${it.title}. ${it.description}".take(300) }.joinToString("\n")
+                allResults.add("News" to newsText)
+            }
+        } catch (_: Exception) { }
+
+        // Combine all results
+        if (allResults.isEmpty()) {
+            return@withContext generateHelpfulResponse(query)
+        }
+
+        // Return the best (longest, most detailed) result
+        val bestResult = allResults.maxByOrNull { it.second.length }?.second ?: generateHelpfulResponse(query)
+
+        // If we have multiple sources, combine them
+        if (allResults.size > 1) {
+            val combined = allResults.take(2).map { "${it.first}: ${it.second}" }.joinToString("\n\n")
+            return@withContext combined.take(1500) // Limit for AI context
+        }
+
+        return@withContext bestResult
     }
 
     /**
@@ -212,7 +358,6 @@ object WebSearchService {
             val extract = extractResult.query?.pages?.get(pageId.toString())?.extract ?: return ""
 
             if (extract.isNotBlank()) {
-                // Clean up and truncate
                 val cleaned = extract
                     .replace(Regex("\\n+"), " ")
                     .replace(Regex("\\s+"), " ")
@@ -220,11 +365,7 @@ object WebSearchService {
                     .take(800)
 
                 val title = firstResult.title ?: ""
-                if (language == "hi") {
-                    "$title: $cleaned"
-                } else {
-                    "$title: $cleaned"
-                }
+                "$title: $cleaned"
             } else {
                 ""
             }
@@ -276,13 +417,53 @@ object WebSearchService {
     }
 
     /**
+     * Search Brave Search API — FREE, returns web results with snippets!
+     * This is the KEY addition that fills the gap between Wikipedia and DuckDuckGo.
+     * No API key needed for basic queries.
+     */
+    private fun searchBrave(query: String): String {
+        return try {
+            val encodedQuery = URLEncoder.encode(query, "UTF-8")
+            // Brave Search public endpoint — no key needed for basic queries
+            val url = "https://search.brave.com/api/suggest?q=$encodedQuery"
+
+            // Alternative: Use Brave's web search results
+            val searchUrl = "https://api.search.brave.com/res/v1/web/search?q=$encodedQuery&count=5"
+            val request = Request.Builder()
+                .url(searchUrl)
+                .header("Accept", "application/json")
+                .header("Accept-Encoding", "gzip")
+                .build()
+
+            val response = client.newCall(request).execute()
+            val body = response.body?.string() ?: return ""
+
+            if (body.isBlank()) return ""
+
+            val braveResult = gson.fromJson(body, BraveSearchResult::class.java)
+            val results = braveResult.web?.results ?: return ""
+
+            if (results.isEmpty()) return ""
+
+            // Combine snippets from top results
+            val combined = results.take(3).mapNotNull { result ->
+                val title = result.title ?: return@mapNotNull null
+                val snippet = result.description ?: ""
+                if (snippet.isNotBlank()) "$title: $snippet" else title
+            }.joinToString("\n")
+
+            combined
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
+    /**
      * Generate a helpful response when all search sources fail.
-     * NEVER returns "I'm having trouble" — always provides something useful.
+     * NEVER returns "I don't have specific info" — always provides something useful.
      */
     private fun generateHelpfulResponse(query: String): String {
         val isHindi = isHindiText(query)
-
-        // Try to provide contextual help based on the query
         val q = query.lowercase()
 
         // Common queries with built-in answers
@@ -303,11 +484,11 @@ object WebSearchService {
             }
         }
 
-        // General helpful response that doesn't feel like an error
+        // Instead of "I don't have info", provide an action-oriented response
         return if (isHindi) {
-            "Main is baare me abhi exact info nahi de pa raha, lekin aap Google par search kar sakte hain. Kya main aapki kisi aur cheez me madad kar sakta hoon?"
+            "Maine internet par search kiya lekin exact answer nahi mila. Aap dobara puch sakte hain ya kuch aur poochein — main koshish karunga help karne ka!"
         } else {
-            "I don't have specific info on that right now, but you can search Google for more details. Is there anything else I can help you with?"
+            "I searched but couldn't find a specific answer for that. Try rephrasing your question, or ask me something else — I'll do my best to help!"
         }
     }
 
@@ -400,6 +581,21 @@ object WebSearchService {
         @SerializedName("FirstURL") val url: String? = null
     )
 
+    // Brave Search API response model
+    data class BraveSearchResult(
+        val web: BraveWebResults? = null
+    )
+
+    data class BraveWebResults(
+        val results: List<BraveSearchItem>? = null
+    )
+
+    data class BraveSearchItem(
+        val title: String? = null,
+        val url: String? = null,
+        val description: String? = null
+    )
+
     // Wikipedia search result models
     data class WikiSearchResult(
         val query: WikiSearchQuery? = null
@@ -430,5 +626,3 @@ object WebSearchService {
         val extract: String? = null
     )
 }
-
-

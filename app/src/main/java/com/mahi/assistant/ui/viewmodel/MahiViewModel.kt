@@ -282,15 +282,45 @@ class MahiViewModel @Inject constructor(
             voiceRecognition.callback = object : VoiceRecognitionEngine.Callback {
                 override fun onResult(text: String) {
                     _isListening.value = false
-                    _assistantState.value = AssistantState.IDLE
-                    if (text.isNotBlank()) processInput(text)
+                    if (text.isNotBlank()) {
+                        processInput(text)
+                    } else if (_continuousMode.value) {
+                        // Empty result in continuous mode — restart listening after brief pause
+                        viewModelScope.launch {
+                            try {
+                                kotlinx.coroutines.delay(800) // Brief pause before re-listening
+                                if (_continuousMode.value && _assistantState.value != AssistantState.SPEAKING) {
+                                    startListening()
+                                }
+                            } catch (_: Exception) {}
+                        }
+                    } else {
+                        _assistantState.value = AssistantState.IDLE
+                    }
                 }
                 override fun onPartial(text: String) {
                     try { _partialTranscript.value = text } catch (_: Exception) {}
                 }
                 override fun onError(code: Int) {
                     _isListening.value = false
-                    _assistantState.value = AssistantState.IDLE
+                    if (_continuousMode.value) {
+                        // Error in continuous mode — auto-restart after delay
+                        val shouldRetry = code != android.speech.SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS
+                        if (shouldRetry) {
+                            viewModelScope.launch {
+                                try {
+                                    kotlinx.coroutines.delay(1500) // Wait before retry
+                                    if (_continuousMode.value && _assistantState.value != AssistantState.SPEAKING) {
+                                        startListening()
+                                    }
+                                } catch (_: Exception) {}
+                            }
+                        } else {
+                            _assistantState.value = AssistantState.IDLE
+                        }
+                    } else {
+                        _assistantState.value = AssistantState.IDLE
+                    }
                 }
                 override fun onReady() {
                     _isListening.value = true
@@ -299,7 +329,11 @@ class MahiViewModel @Inject constructor(
                 override fun onEnd() {
                     _isListening.value = false
                     if (_assistantState.value == AssistantState.LISTENING) {
-                        _assistantState.value = AssistantState.IDLE
+                        // Speech ended naturally — in continuous mode, don't go IDLE
+                        // The onResult or onError will handle next steps
+                        if (!_continuousMode.value) {
+                            _assistantState.value = AssistantState.IDLE
+                        }
                     }
                 }
             }
@@ -313,13 +347,35 @@ class MahiViewModel @Inject constructor(
                     _assistantState.value = AssistantState.SPEAKING
                 }
                 override fun onSpeakEnd(utteranceId: String) {
-                    _assistantState.value = AssistantState.IDLE
                     if (_continuousMode.value) {
-                        try { startListening() } catch (_: Exception) {}
+                        // CONTINUOUS CONVERSATION: Auto-restart listening after TTS ends
+                        // This creates a natural back-and-forth like ChatGPT Voice
+                        _assistantState.value = AssistantState.IDLE
+                        viewModelScope.launch {
+                            try {
+                                kotlinx.coroutines.delay(600) // Brief natural pause
+                                if (_continuousMode.value) {
+                                    startListening()
+                                }
+                            } catch (_: Exception) {}
+                        }
+                    } else {
+                        _assistantState.value = AssistantState.IDLE
                     }
                 }
                 override fun onError(utteranceId: String) {
                     _assistantState.value = AssistantState.IDLE
+                    // Even on TTS error, restart listening in continuous mode
+                    if (_continuousMode.value) {
+                        viewModelScope.launch {
+                            try {
+                                kotlinx.coroutines.delay(1000)
+                                if (_continuousMode.value) {
+                                    startListening()
+                                }
+                            } catch (_: Exception) {}
+                        }
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -2187,73 +2243,171 @@ class MahiViewModel @Inject constructor(
         // Detect language for better response — PRIORITY: user's language toggle setting
         val isHindiText = com.mahi.assistant.api.WebSearchService.isHindiText(input)
         val currentLang = _currentLanguage.value
-        // If user typed/spoke Hindi Devanagari, always respond in Hinglish regardless of toggle
-        // If user typed English but toggle is Hindi, respond in Hinglish
-        // If user typed English and toggle is English, respond in English
         val responseLang = when {
             isHindiText -> "hi" // Hindi script detected → Hinglish response
             currentLang == "hi" -> "hi" // Hindi mode → Hinglish response
             else -> "en" // English mode → English response
         }
 
-        if (!aiEngine.isConfigured()) {
-            // No AI key — use web search directly!
-            return tryWebSearch(input, responseLang)
-        }
-
         // Try to extract and save user memory from this input
         try { saveUserMemory(input) } catch (_: Exception) { }
 
-        return try {
-            // Pass last 50 messages as context for STRONG memory
-            val history = _messages.value.takeLast(50).map {
-                com.mahi.assistant.ai.ChatMessage(
-                    role = if (it.role == MessageRole.USER) com.mahi.assistant.ai.ChatMessage.ROLE_USER else com.mahi.assistant.ai.ChatMessage.ROLE_MODEL,
-                    content = it.content,
-                    timestamp = it.timestamp
-                )
-            }
+        // ── STEP 1: Try AI with full context + memory ──────────────────
+        if (aiEngine.isConfigured()) {
+            try {
+                // Build conversation context with last 50 messages for STRONG memory
+                val history = _messages.value.takeLast(50).map {
+                    com.mahi.assistant.ai.ChatMessage(
+                        role = if (it.role == MessageRole.USER) com.mahi.assistant.ai.ChatMessage.ROLE_USER else com.mahi.assistant.ai.ChatMessage.ROLE_MODEL,
+                        content = it.content,
+                        timestamp = it.timestamp
+                    )
+                }
 
-            // Include user memories in context for personalization
-            val memories = readUserMemories()
-            val contextPrefix = if (memories.isNotBlank()) {
-                com.mahi.assistant.ai.ChatMessage(
+                // Include user memories in context for personalization
+                val memories = readUserMemories()
+                val contextPrefix = if (memories.isNotBlank()) {
+                    com.mahi.assistant.ai.ChatMessage(
+                        role = com.mahi.assistant.ai.ChatMessage.ROLE_MODEL,
+                        content = "[System: User memories - $memories]",
+                        timestamp = 0L
+                    )
+                } else null
+
+                // CRITICAL: Language instruction based on toggle
+                val langInstruction = when (responseLang) {
+                    "hi" -> "[CRITICAL INSTRUCTION: You MUST respond in Hinglish (Hindi written in English/Roman script). " +
+                            "DO NOT use Devanagari script. DO NOT respond in pure English. " +
+                            "Write Hindi words in English letters. Example: 'Haan main aapki madad kar sakta hoon!' " +
+                            "'Aaj ka mausam accha hai.' 'Kya aap mujhe aur bata sakte hain?']"
+                    else -> "[CRITICAL INSTRUCTION: You MUST respond in English. " +
+                            "Do NOT use Hindi, Hinglish, or Devanagari script. " +
+                            "Respond in clear, natural English.]"
+                }
+
+                // RESEARCH INSTRUCTION: Tell AI to use web research results if provided
+                val researchInstruction = "[INSTRUCTION: If you see web research results above, use them to answer. " +
+                        "Synthesize information naturally. Cite sources when relevant. " +
+                        "If research results contradict your knowledge, trust the research. " +
+                        "If no research results provided, answer from your knowledge.]"
+
+                // Check if this query needs web research
+                val needsWebResearch = com.mahi.assistant.api.WebSearchService.needsResearch(input)
+
+                // If research needed, do web search FIRST, then pass results to AI for summarization
+                var researchResults = ""
+                if (needsWebResearch) {
+                    try {
+                        researchResults = com.mahi.assistant.api.WebSearchService.deepResearch(input)
+                    } catch (_: Exception) {}
+                }
+
+                val researchContext = if (researchResults.isNotBlank() && researchResults.length > 30) {
+                    com.mahi.assistant.ai.ChatMessage(
+                        role = com.mahi.assistant.ai.ChatMessage.ROLE_MODEL,
+                        content = "[Web Research Results for '$input':\n$researchResults]",
+                        timestamp = 0L
+                    )
+                } else null
+
+                val langHint = com.mahi.assistant.ai.ChatMessage(
                     role = com.mahi.assistant.ai.ChatMessage.ROLE_MODEL,
-                    content = "[System: User memories - $memories]",
+                    content = langInstruction,
                     timestamp = 0L
                 )
-            } else null
+                val researchHint = com.mahi.assistant.ai.ChatMessage(
+                    role = com.mahi.assistant.ai.ChatMessage.ROLE_MODEL,
+                    content = researchInstruction,
+                    timestamp = 0L
+                )
 
-            // CRITICAL FIX: Always add explicit language instruction to AI context
-            // This ensures AI ALWAYS responds in the correct language based on toggle
-            val langInstruction = when (responseLang) {
-                "hi" -> "[CRITICAL INSTRUCTION: You MUST respond in Hinglish (Hindi written in English/Roman script). " +
-                        "DO NOT use Devanagari script. DO NOT respond in pure English. " +
-                        "Write Hindi words in English letters. Example: 'Haan main aapki madad kar sakta hoon!' " +
-                        "'Aaj ka mausam accha hai.' 'Kya aap mujhe aur bata sakte hain?']"
-                else -> "[CRITICAL INSTRUCTION: You MUST respond in English. " +
-                        "Do NOT use Hindi, Hinglish, or Devanagari script. " +
-                        "Respond in clear, natural English.]"
+                val fullHistory = listOfNotNull(langHint, researchHint, researchContext, contextPrefix) + history
+                val response = aiEngine.chatWithMemory(input, fullHistory)
+
+                // If the response looks like an error, fall through to web search
+                if (response.contains("trouble connecting") || response.contains("check your internet") ||
+                    response.contains("API key") || response.contains("having trouble") ||
+                    response.contains("No AI backend") || response == "NO_AI_CONFIGURED" || response == "AI_BACKENDS_FAILED") {
+                    // AI failed — use research results directly if available
+                    if (researchResults.isNotBlank() && researchResults.length > 30) {
+                        return summarizeResearch(input, researchResults, responseLang)
+                    }
+                    // Fall through to web search
+                } else if (!response.contains("error", ignoreCase = true) || response.length > 100) {
+                    // Good AI response — return it
+                    return response
+                }
+            } catch (e: Exception) {
+                // AI failed — try research
             }
-            val langHint = com.mahi.assistant.ai.ChatMessage(
-                role = com.mahi.assistant.ai.ChatMessage.ROLE_MODEL,
-                content = langInstruction,
-                timestamp = 0L
-            )
+        }
 
-            val fullHistory = listOfNotNull(langHint, contextPrefix) + history
-            val response = aiEngine.chatWithMemory(input, fullHistory)
-            // If the response looks like an error, try web search
-            if (response.contains("trouble connecting") || response.contains("check your internet") ||
-                response.contains("API key") || response.contains("having trouble") ||
-                response.contains("No AI backend") || response.contains("error") ||
-                response == "NO_AI_CONFIGURED" || response == "AI_BACKENDS_FAILED") {
-                tryWebSearch(input, responseLang)
+        // ── STEP 2: AI not configured or failed — Deep research pipeline ──
+        return try {
+            val researchResults = com.mahi.assistant.api.WebSearchService.deepResearch(input)
+            if (researchResults.isNotBlank() && researchResults.length > 30) {
+                // If AI is available, use it to summarize the research
+                if (aiEngine.isConfigured()) {
+                    try {
+                        val summaryPrompt = buildString {
+                            append("Based on the following web research, answer the user's question naturally and conversationally.\n\n")
+                            append("Question: $input\n\n")
+                            append("Research Results:\n${researchResults.take(1000)}\n\n")
+                            if (responseLang == "hi") {
+                                append("Answer in Hinglish (Hindi in English script). Do NOT use Devanagari.")
+                            } else {
+                                append("Answer in English.")
+                            }
+                        }
+                        val summary = aiEngine.queryOnce(summaryPrompt)
+                        if (summary.isNotBlank() && !summary.contains("error", ignoreCase = true)) {
+                            return summary
+                        }
+                    } catch (_: Exception) {}
+                }
+                // AI summarization failed — return research directly
+                summarizeResearch(input, researchResults, responseLang)
             } else {
-                response
+                // Even research failed — provide helpful response
+                tryWebSearch(input, responseLang)
             }
         } catch (e: Exception) {
             tryWebSearch(input, responseLang)
+        }
+    }
+
+    /**
+     * Summarize web research results into a natural, conversational response.
+     * Never returns "I don't have info" — always makes the best of what we have.
+     */
+    private fun summarizeResearch(query: String, research: String, language: String): String {
+        val isHindi = language == "hi"
+        val q = query.lowercase()
+
+        // Quick answers for common queries
+        when {
+            q.contains("time") || q.contains("samay") || q.contains("waqt") -> {
+                val time = java.text.SimpleDateFormat("hh:mm a", java.util.Locale.getDefault()).format(java.util.Date())
+                return if (isHindi) "Abhi ka time $time hai." else "Current time is $time."
+            }
+            q.contains("date") || q.contains("tarikh") -> {
+                val date = java.text.SimpleDateFormat("dd MMMM yyyy, EEEE", java.util.Locale.getDefault()).format(java.util.Date())
+                return if (isHindi) "Aaj ki date $date hai." else "Today's date is $date."
+            }
+        }
+
+        // Clean up research text for natural response
+        val cleanResearch = research
+            .replace(Regex("\\[\\w+\\]\\s*"), "")
+            .replace(Regex("Source:\\s*"), "")
+            .trim()
+            .take(600)
+
+        // Format as natural conversational response
+        return if (isHindi) {
+            "Mujhe ye mila: $cleanResearch"
+        } else {
+            "Here's what I found: $cleanResearch"
         }
     }
 
@@ -2263,50 +2417,41 @@ class MahiViewModel @Inject constructor(
      * Uses: Wikipedia → DuckDuckGo → Contextual help
      */
     private suspend fun tryWebSearch(query: String, language: String = "en"): String {
+        val isHindi = language == "hi" || com.mahi.assistant.api.WebSearchService.isHindiText(query)
+
         return try {
-            val searchResult = com.mahi.assistant.api.WebSearchService.search(query)
+            // Try deep research first (4 sources: Wikipedia + DuckDuckGo + Brave + News)
+            val searchResult = com.mahi.assistant.api.WebSearchService.deepResearch(query)
             if (searchResult.isNotBlank() && searchResult.length > 20 &&
                 !searchResult.contains("couldn't find") && !searchResult.contains("couldn't search")) {
-                searchResult
-            } else {
-                // Even web search failed — provide helpful contextual response
-                val isHindi = com.mahi.assistant.api.WebSearchService.isHindiText(query)
-                val q = query.lowercase()
+                return summarizeResearch(query, searchResult, language)
+            }
 
-                // Try to give useful response based on query type
-                when {
-                    q.contains("weather") || q.contains("mausam") || q.contains("मौसम") -> {
-                        val city = settingsManager.getDefaultCity()
-                        if (isHindi) "$city ka mausam jaanne ke liye 'mausam batao' bolo."
-                        else "Say 'weather' to check the weather for $city."
-                    }
-                    q.contains("news") || q.contains("khabar") || q.contains("खबर") -> {
-                        if (isHindi) "Latest khabar jaanne ke liye 'aaj ki khabar' bolo."
-                        else "Say 'news' to get the latest headlines."
-                    }
-                    q.contains("call") || q.contains("कॉल") -> {
-                        if (isHindi) "Call karne ke liye contact ka naam bolo, jaise 'call Ayush karo'."
-                        else "Say a contact name to make a call, like 'call Ayush'."
-                    }
-                    q.contains("time") || q.contains("samay") || q.contains("समय") -> {
-                        val time = java.text.SimpleDateFormat("hh:mm a", java.util.Locale.getDefault()).format(java.util.Date())
-                        if (isHindi) "Abhi ka time $time hai."
-                        else "Current time is $time."
-                    }
-                    q.contains("date") || q.contains("तारीख") -> {
-                        val date = java.text.SimpleDateFormat("dd MMMM yyyy, EEEE", java.util.Locale.getDefault()).format(java.util.Date())
-                        if (isHindi) "Aaj ki date $date hai."
-                        else "Today's date is $date."
-                    }
-                    else -> {
-                        if (isHindi) "Main abhi is baare me detail nahi de pa raha, lekin aap Google par search kar sakte hain. Kya main kisi aur cheez me madad karoon?"
-                        else "I don't have specific info on that right now. You can search Google for more details. Can I help with anything else?"
-                    }
+            // Research failed - provide contextual response (NEVER "I don't have info")
+            val q = query.lowercase()
+            when {
+                q.contains("weather") || q.contains("mausam") -> {
+                    val city = settingsManager.getDefaultCity()
+                    if (isHindi) "$city ka mausam jaanne ke liye 'mausam batao' bolo." else "Say 'weather' to check the weather for $city."
+                }
+                q.contains("news") || q.contains("khabar") -> {
+                    if (isHindi) "Latest khabar jaanne ke liye 'aaj ki khabar' bolo." else "Say 'news' to get the latest headlines."
+                }
+                q.contains("time") || q.contains("samay") -> {
+                    val time = java.text.SimpleDateFormat("hh:mm a", java.util.Locale.getDefault()).format(java.util.Date())
+                    if (isHindi) "Abhi ka time $time hai." else "Current time is $time."
+                }
+                q.contains("date") -> {
+                    val date = java.text.SimpleDateFormat("dd MMMM yyyy, EEEE", java.util.Locale.getDefault()).format(java.util.Date())
+                    if (isHindi) "Aaj ki date $date hai." else "Today's date is $date."
+                }
+                else -> {
+                    if (isHindi) "Main search kar raha hoon lekin abhi exact answer nahi mil raha. Dobara puch sakte hain ya kuch aur poochein!"
+                    else "I searched but couldn't find a specific answer right now. Try rephrasing or ask me something else - I'll keep trying!"
                 }
             }
         } catch (e: Exception) {
-            val isHindi = com.mahi.assistant.api.WebSearchService.isHindiText(query)
-            if (isHindi) "Internet connection check karo aur dobara try karo. Main device commands jaise call, SMS, flashlight abhi bhi kar sakta hoon!"
+            if (isHindi) "Internet connection check karo aur dobara try karo. Device commands jaise call, SMS, flashlight abhi bhi kaam karte hain!"
             else "Please check your internet connection and try again. Device commands like calls, SMS, and flashlight still work!"
         }
     }
