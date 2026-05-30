@@ -588,7 +588,7 @@ class MahiViewModel @Inject constructor(
      * Detect greeting patterns and return a time-based, personality-rich response.
      * Returns null if input is not a greeting.
      */
-    private fun detectGreeting(input: String): String? {
+    private suspend fun detectGreeting(input: String): String? {
         val lower = input.lowercase().trim()
         val greetingPatterns = listOf(
             """^(hey|hi|hello|yo|sup|what'?s up|hola)\s*(mahi)?$""".toRegex(RegexOption.IGNORE_CASE),
