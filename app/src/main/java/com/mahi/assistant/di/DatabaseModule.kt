@@ -3,9 +3,11 @@ package com.mahi.assistant.di
 import android.content.Context
 import androidx.room.Room
 import com.mahi.assistant.data.local.DeviceStateDao
+import com.mahi.assistant.data.local.ExpenseDao
 import com.mahi.assistant.data.local.MahiDatabase
 import com.mahi.assistant.data.local.MessageDao
 import com.mahi.assistant.data.local.RoutineDao
+import com.mahi.assistant.data.local.UserMemoryDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -27,7 +29,7 @@ object DatabaseModule {
             MahiDatabase::class.java,
             MahiDatabase.DATABASE_NAME
         )
-            .fallbackToDestructiveMigration()
+            .addMigrations(MahiDatabase.MIGRATION_1_2)
             .build()
     }
 
@@ -44,5 +46,15 @@ object DatabaseModule {
     @Provides
     fun provideDeviceStateDao(database: MahiDatabase): DeviceStateDao {
         return database.deviceStateDao()
+    }
+
+    @Provides
+    fun provideUserMemoryDao(database: MahiDatabase): UserMemoryDao {
+        return database.userMemoryDao()
+    }
+
+    @Provides
+    fun provideExpenseDao(database: MahiDatabase): ExpenseDao {
+        return database.expenseDao()
     }
 }

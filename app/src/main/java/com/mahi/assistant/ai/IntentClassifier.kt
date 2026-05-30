@@ -50,6 +50,8 @@ class IntentClassifier(
         CONTINUOUS_MODE,
         CAMERA,
         FILE_OPEN,
+        EMERGENCY_SOS,
+        EXPENSE_TRACK,
         GENERAL_CHAT
     }
 
@@ -73,6 +75,25 @@ class IntentClassifier(
     )
 
     private val ultraFastPatterns: List<QuickPattern> = listOf(
+
+        // ═══════════════ EMERGENCY SOS — works OFFLINE ═══════════════
+        QuickPattern(IntentType.EMERGENCY_SOS, "emergency_sos",
+            Regex("(?i)\\b(?:emergency|sos|help\\s+help|madad|bahut\\s+mushkil|danger|bachao|save\\s+me)\\b")),
+        QuickPattern(IntentType.EMERGENCY_SOS, "emergency_sos",
+            Regex("(?i)\\b(?:emergency\\s+sos|call\\s+emergency|emergency\\s+call|112\\s+call|police\\s+call)\\b")),
+
+        // ═══════════════ EXPENSE TRACK — works OFFLINE ═══════════════
+        QuickPattern(IntentType.EXPENSE_TRACK, "add_expense",
+            Regex("(?i)\\b(?:expense\\s+add|add\\s+expense|kharcha\\s+add|kharcha\\s+karo|kharcha\\s+kiya|spending\\s+add|track\\s+expense)\\b"),
+            paramExtractor = { match, input -> extractExpenseParams(input) }),
+        QuickPattern(IntentType.EXPENSE_TRACK, "add_expense",
+            Regex("(?i)\\b\\d+\\s*(?:rupee|rs|₹|dollar|\\$)\\s+\\w+\\s*(?:kharcha|expense|spending)\\b"),
+            paramExtractor = { match, input -> extractExpenseParams(input) }),
+        QuickPattern(IntentType.EXPENSE_TRACK, "read_expenses",
+            Regex("(?i)\\b(?:kitna\\s+kharcha|kharcha\\s+kitna|total\\s+expense|expense\\s+total|spending\\s+total|aaj\\s+ka\\s+kharcha|today'?s?\\s+expense|week\\s+expense|expenses?\\s+(?:dikhao|show|read|check))\\b")),
+        QuickPattern(IntentType.EXPENSE_TRACK, "add_expense",
+            Regex("(?i)\\b(?:kharcha|expense|spending)\\s+(?:kiya|kita|hua|hua\\s+hai|add|save)\\b"),
+            paramExtractor = { match, input -> extractExpenseParams(input) }),
 
         // ═══════════════ FLASHLIGHT — works OFFLINE ═══════════════
         QuickPattern(IntentType.DEVICE_CONTROL, "flashlight_on",
@@ -105,10 +126,10 @@ class IntentClassifier(
         // ═══════════════ CALL — works OFFLINE ═══════════════
         QuickPattern(IntentType.CALL, "make_call",
             Regex("(?i)\\b(?:call|phone|ring|dial)\\s+\\w+"),
-            paramExtractor = { match, input -> mapOf("contact" to extractContactFromInput(input)) }),
+            paramExtractor = { match, input -> mapOf("contact" to extractContactFromInput(input, "call")) }),
         QuickPattern(IntentType.CALL, "make_call",
             Regex("(?i)\\b\\w+\\s+ko\\s+(?:call|phone|ring)\\s*(?:karo)?\\b"),
-            paramExtractor = { match, input -> mapOf("contact" to extractContactFromInput(input)) }),
+            paramExtractor = { match, input -> mapOf("contact" to extractContactFromInput(input, "call")) }),
         QuickPattern(IntentType.CALL, "make_call",
             Regex("(?i)\\b(?:call|phone|ring|dial)\\s+(?:karo|kar)\\b")),
         QuickPattern(IntentType.CALL, "make_call",
@@ -128,21 +149,50 @@ class IntentClassifier(
             Regex("(?i)\\b(?:youtube|yt)\\s+(?:search|pe)\\s+\\w+"),
             paramExtractor = { match, input -> mapOf("query" to extractTopicFromInput(input, listOf("youtube", "yt", "search", "pe"))) }),
 
-        // ═══════════════ WHATSAPP — works OFFLINE ═══════════════
+        // ═══════════════ WHATSAPP — SMART extraction (Bug Fix #1) ═══════════════
+        // Hinglish: "whatsapp pe ayush ko message bhejo ki kal exam hai"
+        QuickPattern(IntentType.WHATSAPP, "send_whatsapp",
+            Regex("(?i)\\b(?:whatsapp|wa)\\s+pe\\s+(\\w+)\\s+ko\\s+(?:message|msg)\\s+(?:bhejo|karo|send)?\\s*(?:ki|ke|ki\\s+ki)?\\s*(.*)"),
+            paramExtractor = { match, input -> mapOf(
+                "contact" to (match.groupValues.getOrNull(1)?.trim()?.ifBlank { "unknown" } ?: "unknown"),
+                "message" to (match.groupValues.getOrNull(2)?.trim()?.ifBlank { "" } ?: "")
+            )}),
+        // "ayush ko whatsapp pe message bhejo ki kal exam hai"
+        QuickPattern(IntentType.WHATSAPP, "send_whatsapp",
+            Regex("(?i)\\b(\\w+)\\s+ko\\s+(?:whatsapp|wa)\\s+pe\\s+(?:message|msg)\\s+(?:bhejo|karo|send)?\\s*(?:ki|ke)?\\s*(.*)"),
+            paramExtractor = { match, input -> mapOf(
+                "contact" to (match.groupValues.getOrNull(1)?.trim()?.ifBlank { "unknown" } ?: "unknown"),
+                "message" to (match.groupValues.getOrNull(2)?.trim()?.ifBlank { "" } ?: "")
+            )}),
+        // English: "send hello to ayush on whatsapp"
+        QuickPattern(IntentType.WHATSAPP, "send_whatsapp",
+            Regex("(?i)\\b(?:send|bhejo)\\s+(.+?)\\s+(?:to|ko)\\s+(\\w+)\\s+(?:on|pe)\\s+(?:whatsapp|wa)\\b"),
+            paramExtractor = { match, input -> mapOf(
+                "message" to (match.groupValues.getOrNull(1)?.trim()?.ifBlank { "" } ?: ""),
+                "contact" to (match.groupValues.getOrNull(2)?.trim()?.ifBlank { "unknown" } ?: "unknown")
+            )}),
+        // "whatsapp pe mom ko bhejo ki I'll be late"
+        QuickPattern(IntentType.WHATSAPP, "send_whatsapp",
+            Regex("(?i)\\b(?:whatsapp|wa)\\s+pe\\s+(\\w+)\\s+ko\\s+(?:bhejo|send)\\s*(?:ki|ke)?\\s*(.*)"),
+            paramExtractor = { match, input -> mapOf(
+                "contact" to (match.groupValues.getOrNull(1)?.trim()?.ifBlank { "unknown" } ?: "unknown"),
+                "message" to (match.groupValues.getOrNull(2)?.trim()?.ifBlank { "" } ?: "")
+            )}),
+        // Generic WhatsApp send patterns (fallback, no specific contact/message extraction)
         QuickPattern(IntentType.WHATSAPP, "send_whatsapp",
             Regex("(?i)\\b(?:whatsapp|wa)\\s+(?:pe\\s+)?(?:message|msg|send|bhejo)\\b"),
-            paramExtractor = { match, input -> mapOf("contact" to extractContactFromInput(input), "message" to "") }),
+            paramExtractor = { match, input -> extractWhatsAppParams(input) }),
         QuickPattern(IntentType.WHATSAPP, "send_whatsapp",
             Regex("(?i)\\b\\w+\\s+ko\\s+(?:whatsapp|wa)\\s+pe\\s+(?:message|msg)\\b"),
-            paramExtractor = { match, input -> mapOf("contact" to extractContactFromInput(input), "message" to "") }),
+            paramExtractor = { match, input -> extractWhatsAppParams(input) }),
         QuickPattern(IntentType.WHATSAPP, "open_whatsapp",
             Regex("(?i)\\b(?:open|launch|start)\\s+(?:whatsapp|wa)\\b")),
         QuickPattern(IntentType.WHATSAPP, "send_whatsapp",
             Regex("(?i)\\b(?:whatsapp|wa)\\s+(?:message|msg)\\s+(?:karo|bhejo|send)"),
-            paramExtractor = { match, input -> mapOf("contact" to extractContactFromInput(input), "message" to "") }),
+            paramExtractor = { match, input -> extractWhatsAppParams(input) }),
         QuickPattern(IntentType.WHATSAPP, "send_whatsapp",
             Regex("(?i)\\b(?:send|bhejo)\\s+.+\\s+(?:on\\s+)?(?:whatsapp|wa)\\b"),
-            paramExtractor = { match, input -> mapOf("contact" to extractContactFromInput(input), "message" to "") }),
+            paramExtractor = { match, input -> extractWhatsAppParams(input) }),
 
         // ═══════════════ WEATHER — uses free Open-Meteo API ═══════════════
         QuickPattern(IntentType.WEATHER, "get_weather",
@@ -175,10 +225,10 @@ class IntentClassifier(
             Regex("(?i)\\b(?:send|write)\\s+(?:a\\s+)?(?:sms|text|text\\s+message)\\b")),
         QuickPattern(IntentType.SMS, "send_sms",
             Regex("(?i)\\b(?:sms|text)\\s+(?:\\w+\\s+)?(?:karo|bhejo|send)\\b"),
-            paramExtractor = { match, input -> mapOf("contact" to extractContactFromInput(input)) }),
+            paramExtractor = { match, input -> mapOf("contact" to extractContactFromInput(input, "sms")) }),
         QuickPattern(IntentType.SMS, "send_sms",
             Regex("(?i)\\b(?:message|msg)\\s+bhejo\\b"),
-            paramExtractor = { match, input -> mapOf("contact" to extractContactFromInput(input)) }),
+            paramExtractor = { match, input -> mapOf("contact" to extractContactFromInput(input, "sms")) }),
 
         // ═══════════════ SMS READ — works OFFLINE ═══════════════
         QuickPattern(IntentType.SMS_READ, "read_sms",
@@ -260,10 +310,10 @@ class IntentClassifier(
             Regex("(?i)\\b(?:find|search|look\\s+up)\\s+(?:contact|number)\\b")),
         QuickPattern(IntentType.CONTACT_SEARCH, "find_contact",
             Regex("(?i)\\b\\w+\\s+(?:ka\\s+number|ka\\s+contact|ka\\s+phone)\\b"),
-            paramExtractor = { match, input -> mapOf("contact" to extractContactFromInput(input)) }),
+            paramExtractor = { match, input -> mapOf("contact" to extractContactFromInput(input, "contact_search")) }),
         QuickPattern(IntentType.CONTACT_SEARCH, "find_contact",
             Regex("(?i)\\b(?:number\\s+batao|contact\\s+search|contact\\s+dhoond)\\b"),
-            paramExtractor = { match, input -> mapOf("contact" to extractContactFromInput(input)) }),
+            paramExtractor = { match, input -> mapOf("contact" to extractContactFromInput(input, "contact_search")) }),
 
         // ═══════════════ TIMER — works OFFLINE ═══════════════
         QuickPattern(IntentType.TIMER, "set_timer",
@@ -383,12 +433,16 @@ Available types:
 - CONTINUOUS_MODE: Toggle always-listening/continuous conversation mode
 - CAMERA: Open camera or take a photo/selfie
 - FILE_OPEN: Open files/downloads folder/file manager
+- EMERGENCY_SOS: Emergency, SOS, help help, danger, bachao, madad
+- EXPENSE_TRACK: Track expenses, add expense, kharcha, spending, kitna kharcha
 - GENERAL_CHAT: General conversation that doesn't fit above
 
 Examples:
 - "play carryminati latest video on youtube" → {"type":"YOUTUBE","action":"search_youtube","params":{"query":"carryminati latest video"}}
 - "call ayush from sim 1" → {"type":"CALL","action":"make_call","params":{"contact":"ayush","sim":"1"}}
 - "text ayush in whatsapp that he needs to call me" → {"type":"WHATSAPP","action":"send_whatsapp","params":{"contact":"ayush","message":"he needs to call me"}}
+- "whatsapp pe ayush ko message bhejo ki kal exam hai" → {"type":"WHATSAPP","action":"send_whatsapp","params":{"contact":"ayush","message":"kal exam hai"}}
+- "send hello to ayush on whatsapp" → {"type":"WHATSAPP","action":"send_whatsapp","params":{"contact":"ayush","message":"hello"}}
 - "aaj ka mausam kaisa hai" → {"type":"WEATHER","action":"get_weather","params":{}}
 - "top 10 bihar breaking news" → {"type":"NEWS","action":"get_news","params":{"topic":"bihar","count":"10"}}
 - "yaad rakhna kal exam hai" → {"type":"NOTE_SAVE","action":"save_note","params":{"note":"kal exam hai"}}
@@ -404,10 +458,17 @@ Examples:
 - "file manager kholo" → {"type":"FILE_OPEN","action":"open_files","params":{}}
 - "sms padho" → {"type":"SMS_READ","action":"read_sms","params":{}}
 - "mujhe apne messages dikhao" → {"type":"SMS_READ","action":"read_sms","params":{}}
+- "emergency help" → {"type":"EMERGENCY_SOS","action":"emergency_sos","params":{}}
+- "bachao madad" → {"type":"EMERGENCY_SOS","action":"emergency_sos","params":{}}
+- "expense add 500 rupees food" → {"type":"EXPENSE_TRACK","action":"add_expense","params":{"amount":"500","category":"food"}}
+- "aaj ka kharcha kitna hua" → {"type":"EXPENSE_TRACK","action":"read_expenses","params":{}}
+- "200 rs ka kharcha transport ka" → {"type":"EXPENSE_TRACK","action":"add_expense","params":{"amount":"200","category":"transport","description":"transport"}}
 
 IMPORTANT: If the user is just chatting/greeting/asking questions, use GENERAL_CHAT.
 If they want to save/remember something, use NOTE_SAVE.
 If they want to recall what they saved, use NOTE_READ.
+If they say emergency, SOS, help help, madad, bachao, use EMERGENCY_SOS.
+If they mention expense, kharcha, spending, use EXPENSE_TRACK.
 
 User input: """.trimIndent()
 
@@ -533,6 +594,15 @@ User input: """.trimIndent()
         val lower = input.lowercase()
 
         return when {
+            // Emergency SOS
+            lower.contains("emergency") || lower.contains("sos") || lower.contains("help help") || lower.contains("madad") || lower.contains("bachao") || lower.contains("danger") ->
+                IntentResult(IntentType.EMERGENCY_SOS, "emergency_sos")
+
+            // Expense tracking
+            lower.contains("kharcha") || lower.contains("expense") || lower.contains("spending") || lower.contains("kitna kharcha") ->
+                IntentResult(IntentType.EXPENSE_TRACK, if (lower.contains("kitna") || lower.contains("total") || lower.contains("dikhao") || lower.contains("show")) "read_expenses" else "add_expense",
+                    mapOf("description" to input))
+
             // YouTube
             lower.contains("youtube") || lower.contains("yt") || lower.contains("video") ->
                 IntentResult(IntentType.YOUTUBE, "search_youtube", mapOf("query" to extractTopic(lower, listOf("youtube", "yt", "video", "play", "watch", "chalao"))))
@@ -646,12 +716,134 @@ User input: """.trimIndent()
     // ──────────────────────────────────────────────────────────────────────────
 
     /**
-     * Extract a contact name from a natural language input string.
-     * Used by ultra-fast patterns to populate the "contact" param.
+     * SMART contact extraction from natural language input.
+     * Uses positional/contextual extraction instead of brute-force word removal.
+     * Handles both English and Hinglish patterns.
      */
-    private fun extractContactFromInput(input: String): String {
-        val cleaned = input.replace(Regex("(?i)\\b(?:call|phone|ring|dial|text|message|send|whatsapp|wa|from|sim\\s*\\d|on|to|that|the|please|karo|bhejo|ka|number|batao|se|ko|pe|a|an|the|my|me|i|want|need|can|you|will|would|should|could|must|shall)\\b"), "").trim()
+    private fun extractContactFromInput(input: String, intentType: String = "general"): String {
+        val lower = input.lowercase()
+
+        // Hinglish patterns: "ayush ko call karo", "ayush ko whatsapp pe message bhejo"
+        val koPattern = Regex("(?i)\\b(\\w+)\\s+ko\\b")
+        val koMatch = koPattern.find(lower)
+        if (koMatch != null) {
+            val name = koMatch.groupValues[1].trim()
+            // Filter out common non-name words
+            if (name !in listOf("kya", "kaise", "kab", "kahan", "kyu", "mujhe", "tumhe", "unko")) {
+                return name
+            }
+        }
+
+        // English patterns: "call ayush", "send message to ayush"
+        val toPattern = Regex("(?i)\\bto\\s+(\\w+)")
+        val toMatch = toPattern.find(lower)
+        if (toMatch != null) {
+            val name = toMatch.groupValues[1].trim()
+            if (name !in listOf("the", "a", "an", "my", "me", "him", "her")) {
+                return name
+            }
+        }
+
+        // "call ayush" pattern — word after the verb
+        val verbPattern = Regex("(?i)\\b(?:call|phone|ring|dial|text|message)\\s+(\\w+)")
+        val verbMatch = verbPattern.find(lower)
+        if (verbMatch != null) {
+            val name = verbMatch.groupValues[1].trim()
+            if (name !in listOf("a", "an", "the", "my", "me", "him", "her", "karo", "please")) {
+                return name
+            }
+        }
+
+        // "ayush ka number" pattern
+        val kaPattern = Regex("(?i)\\b(\\w+)\\s+(?:ka|ki)\\s+(?:number|contact|phone)\\b")
+        val kaMatch = kaPattern.find(lower)
+        if (kaMatch != null) {
+            return kaMatch.groupValues[1].trim()
+        }
+
+        // Fallback: remove common filler words and return what's left
+        val cleaned = input.replace(Regex("(?i)\\b(?:call|phone|ring|dial|text|message|send|whatsapp|wa|from|sim\\s*\\d|on|to|that|the|please|karo|bhejo|ka|number|batao|se|ko|pe|a|an|the|my|me|i|want|need|can|you|will|would|should|could|must|shall|msg|pe|karo|bhejo)\\b"), "").trim()
         return cleaned.ifBlank { "unknown" }
+    }
+
+    /**
+     * SMART WhatsApp parameter extraction.
+     * Extracts both contact and message from WhatsApp commands.
+     */
+    private fun extractWhatsAppParams(input: String): Map<String, String> {
+        val contact = extractContactFromInput(input, "whatsapp")
+        val message = extractWhatsAppMessage(input)
+        return mapOf("contact" to contact, "message" to message)
+    }
+
+    /**
+     * Extract the message portion from a WhatsApp command.
+     * Handles both English and Hinglish patterns.
+     */
+    private fun extractWhatsAppMessage(input: String): String {
+        val lower = input.lowercase()
+
+        // Hinglish: "ki kal exam hai" → message is after "ki"
+        val kiPattern = Regex("(?i)\\bki\\s+(.+?)$")
+        val kiMatch = kiPattern.find(lower)
+        if (kiMatch != null) {
+            return kiMatch.groupValues[1].trim().ifBlank { "" }
+        }
+
+        // English: "that I'll be late" → message is after "that"
+        val thatPattern = Regex("(?i)\\bthat\\s+(.+?)$")
+        val thatMatch = thatPattern.find(lower)
+        if (thatMatch != null) {
+            return thatMatch.groupValues[1].trim().ifBlank { "" }
+        }
+
+        // "send hello on whatsapp" → message is between "send" and "on whatsapp"
+        val sendPattern = Regex("(?i)\\b(?:send|bhejo)\\s+(.+?)\\s+(?:on|pe)\\s+(?:whatsapp|wa)\\b")
+        val sendMatch = sendPattern.find(lower)
+        if (sendMatch != null) {
+            return sendMatch.groupValues[1].trim().ifBlank { "" }
+        }
+
+        // Quoted text: "whatsapp pe 'hello' bhejo" or "whatsapp pe "hello" bhejo"
+        val quotePattern = Regex("[\"'](.+?)[\"']")
+        val quoteMatch = quotePattern.find(input)
+        if (quoteMatch != null) {
+            return quoteMatch.groupValues[1].trim()
+        }
+
+        return ""
+    }
+
+    /**
+     * Extract expense parameters from natural language input.
+     * Handles: "500 rupees food", "200 rs ka kharcha transport ka", "expense add 100 food"
+     */
+    private fun extractExpenseParams(input: String): Map<String, String> {
+        val lower = input.lowercase()
+        val params = mutableMapOf<String, String>()
+
+        // Extract amount
+        val amountPattern = Regex("(\\d+(?:\\.\\d+)?)\\s*(?:rupee|rs|₹|dollar|\\$|rupaye)?", RegexOption.IGNORE_CASE)
+        val amountMatch = amountPattern.find(lower)
+        if (amountMatch != null) {
+            params["amount"] = amountMatch.groupValues[1]
+        }
+
+        // Extract category
+        val categories = listOf("food", "transport", "shopping", "bills", "entertainment", "khana", "travel", "medical", "education", "rent", "other")
+        val foundCategory = categories.firstOrNull { lower.contains(it) }
+        params["category"] = foundCategory ?: "other"
+
+        // Extract description (everything after amount/category keywords)
+        val descClean = lower
+            .replace(Regex("(?i)\\b(?:expense|kharcha|spending|add|save|karo|kiya|hua|hai|track|ki|ka|ke)\\b"), "")
+            .replace(Regex("\\d+(?:\\.\\d+)?\\s*(?:rupee|rs|₹|dollar|\\$|rupaye)?"), "")
+            .trim()
+        if (descClean.isNotBlank()) {
+            params["description"] = descClean
+        }
+
+        return params
     }
 
     /**
@@ -689,8 +881,8 @@ User input: """.trimIndent()
 
     // Keep old methods for backward compatibility with keywordFallback
     private fun extractContact(input: String): String {
-        val cleaned = input.replace(Regex("(?i)\\b(?:call|phone|ring|dial|text|message|send|whatsapp|wa|from|sim\\s*\\d|on|to|that|the|please|karo|bhejo|ka|number|batao|se|ko)\\b"), "").trim()
-        return cleaned.ifBlank { "unknown" }
+        // Use the smart extraction
+        return extractContactFromInput(input, "general")
     }
 
     private fun extractTopic(input: String, removeWords: List<String>): String {

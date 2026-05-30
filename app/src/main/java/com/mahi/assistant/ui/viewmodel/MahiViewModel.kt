@@ -15,9 +15,11 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.SystemClock
 import android.provider.AlarmClock
+import android.provider.CalendarContract
 import android.provider.CallLog
 import android.provider.ContactsContract
 import android.provider.Settings
+import android.telephony.SmsManager
 import android.text.format.DateUtils
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -27,10 +29,14 @@ import com.mahi.assistant.api.NewsClient
 import com.mahi.assistant.api.NewsService
 import com.mahi.assistant.automation.RoutineEngine
 import com.mahi.assistant.control.DeviceControlManager
-import com.mahi.assistant.receiver.ReminderReceiver
+import com.mahi.assistant.data.local.ExpenseDao
+import com.mahi.assistant.data.local.ExpenseEntity
 import com.mahi.assistant.data.local.MessageDao
 import com.mahi.assistant.data.local.MessageEntity
 import com.mahi.assistant.data.local.SettingsManager
+import com.mahi.assistant.data.local.UserMemoryDao
+import com.mahi.assistant.data.local.UserMemoryEntity
+import com.mahi.assistant.receiver.ReminderReceiver
 import com.mahi.assistant.data.model.AssistantState
 import com.mahi.assistant.data.model.ChatMessage
 import com.mahi.assistant.data.model.MessageRole
@@ -113,6 +119,8 @@ class MahiViewModel @Inject constructor(
     private val deviceControlManager: DeviceControlManager,
     private val routineEngine: RoutineEngine,
     private val messageDao: MessageDao,
+    private val userMemoryDao: UserMemoryDao,
+    private val expenseDao: ExpenseDao,
     private val voiceRecognition: VoiceRecognitionEngine,
     private val ttsEngine: TextToSpeechEngine,
     private val settingsManager: SettingsManager
@@ -230,7 +238,7 @@ class MahiViewModel @Inject constructor(
         // Load conversation history from Room and pass to AI engine as context
         viewModelScope.launch {
             try {
-                val entities = messageDao.getRecent(20)
+                val entities = messageDao.getRecent(50)
                 val chatMessages = entities.map { entity: MessageEntity ->
                     com.mahi.assistant.ai.ChatMessage(
                         role = if (entity.role == "USER") com.mahi.assistant.ai.ChatMessage.ROLE_USER else com.mahi.assistant.ai.ChatMessage.ROLE_MODEL,
@@ -418,7 +426,14 @@ class MahiViewModel @Inject constructor(
             IntentClassifier.IntentType.REMINDER -> setReminder(intent.params["task"] ?: "", intent.params["time"] ?: "")
             IntentClassifier.IntentType.ROUTINE -> executeRoutine(intent.action)
             IntentClassifier.IntentType.NOTIFICATION -> readNotifications()
-            IntentClassifier.IntentType.CALENDAR -> launchCalendar()
+            IntentClassifier.IntentType.CALENDAR -> {
+                if (intent.action.contains("create") || intent.action.contains("add") || intent.action.contains("event"))
+                    createCalendarEvent(intent.params)
+                else
+                    launchCalendar()
+            }
+            IntentClassifier.IntentType.EMERGENCY_SOS -> handleEmergencySos()
+            IntentClassifier.IntentType.EXPENSE_TRACK -> handleExpense(intent.action, intent.params)
             IntentClassifier.IntentType.APP_LAUNCH -> launchApp(intent.params["app"] ?: "")
             IntentClassifier.IntentType.WEB_SEARCH -> launchWebSearch(intent.params["query"] ?: originalInput)
             IntentClassifier.IntentType.MEDIA_CONTROL -> handleMediaControl(intent.params["action"] ?: "play")
@@ -507,46 +522,42 @@ class MahiViewModel @Inject constructor(
             val phoneNumber = if (contact.isNotBlank() && contact != "unknown") lookupContactPhoneNumber(contact) else null
 
             if (phoneNumber != null) {
-                // We have a phone number — use WhatsApp's native sharing intent
-                val cleanNumber = phoneNumber.replace(Regex("[^+\\d]"), "")
-                // Remove the + for wa.me URL
-                val waNumber = cleanNumber.replace("+", "")
+                // Clean the phone number: digits only, no +, no spaces
+                val waNumber = phoneNumber.replace(Regex("[^\\d]"), "")
 
                 if (message != null && message.isNotBlank()) {
-                    // METHOD 1: Try WhatsApp direct share with phone number + text
+                    // PRIMARY METHOD: wa.me deep link with setPackage (most reliable)
                     try {
-                        val intent = Intent(Intent.ACTION_SEND).apply {
-                            type = "text/plain"
-                            putExtra(Intent.EXTRA_TEXT, message)
-                            // Try to set the phone number as extra for direct chat
-                            putExtra("jid", "${waNumber}@s.whatsapp.net")
+                        val waIntent = Intent(Intent.ACTION_VIEW).apply {
+                            data = Uri.parse("https://wa.me/$waNumber?text=${URLEncoder.encode(message, "UTF-8")}")
                             setPackage("com.whatsapp")
                             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
-                        appContext.startActivity(intent)
-                        return "Sending WhatsApp message to $contact: $message"
+                        appContext.startActivity(waIntent)
+                        return "Opening WhatsApp chat with $contact. Message ready to send."
                     } catch (_: Exception) {
-                        // METHOD 2: Fallback to wa.me link
+                        // FALLBACK METHOD 1: Browser wa.me link
                         try {
-                            val waIntent = Intent(Intent.ACTION_VIEW).apply {
-                                data = Uri.parse("https://wa.me/$waNumber?text=${URLEncoder.encode(message, "UTF-8")}")
-                                setPackage("com.whatsapp")
-                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            }
-                            appContext.startActivity(waIntent)
-                            return "Opening WhatsApp chat with $contact. Message ready to send."
-                        } catch (_: Exception) {
-                            // METHOD 3: Browser fallback
                             val webIntent = Intent(Intent.ACTION_VIEW).apply {
                                 data = Uri.parse("https://wa.me/$waNumber?text=${URLEncoder.encode(message, "UTF-8")}")
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             }
                             appContext.startActivity(webIntent)
                             return "Opening WhatsApp web for $contact."
+                        } catch (_: Exception) {
+                            // FALLBACK METHOD 2: ACTION_SHARE with text
+                            val intent = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TEXT, message)
+                                setPackage("com.whatsapp")
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            appContext.startActivity(intent)
+                            return "Opening WhatsApp with your message for $contact."
                         }
                     }
                 } else {
-                    // No message — just open chat with contact
+                    // No message — just open chat with contact via wa.me
                     try {
                         val intent = Intent(Intent.ACTION_VIEW).apply {
                             data = Uri.parse("https://wa.me/$waNumber")
@@ -1622,6 +1633,261 @@ class MahiViewModel @Inject constructor(
         } catch (e: Exception) { "Couldn't open calendar. ${e.message}" }
     }
 
+    // ══════════════════════════════════════════════════════════════════════
+    // CALENDAR EVENT — Create a new calendar event
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun createCalendarEvent(params: Map<String, String>): String {
+        return try {
+            val intent = Intent(Intent.ACTION_INSERT).apply {
+                data = CalendarContract.Events.CONTENT_URI
+                putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, System.currentTimeMillis())
+                putExtra(CalendarContract.EXTRA_EVENT_END_TIME, System.currentTimeMillis() + 3600000) // 1 hour default
+                params["title"]?.let { putExtra(CalendarContract.Events.TITLE, it) }
+                params["description"]?.let { putExtra(CalendarContract.Events.DESCRIPTION, it) }
+                params["location"]?.let { putExtra(CalendarContract.Events.EVENT_LOCATION, it) }
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            appContext.startActivity(intent)
+            "Creating calendar event."
+        } catch (e: Exception) {
+            "Couldn't create calendar event. ${e.message}"
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // EMERGENCY SOS — Send SMS with location + Call emergency
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun handleEmergencySos(): String {
+        val results = mutableListOf<String>()
+
+        // Try to get current location
+        var locationText = "Location unavailable"
+        try {
+            val locationManager = appContext.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            val lastKnown = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                ?: locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+            if (lastKnown != null) {
+                locationText = "https://maps.google.com/?q=${lastKnown.latitude},${lastKnown.longitude}"
+            }
+        } catch (_: Exception) { }
+
+        // Try to send SMS to first contact
+        try {
+            val firstContactNumber = getFirstContactNumber()
+            if (firstContactNumber != null) {
+                val smsManager = SmsManager.getDefault()
+                smsManager.sendTextMessage(
+                    firstContactNumber,
+                    null,
+                    "EMERGENCY! I need help! My location: $locationText — Sent via MAHI Assistant",
+                    null,
+                    null
+                )
+                results.add("Emergency SMS sent with your location")
+            } else {
+                results.add("No contact found for emergency SMS")
+            }
+        } catch (e: SecurityException) {
+            results.add("SMS permission needed for emergency")
+        } catch (_: Exception) {
+            results.add("Could not send emergency SMS")
+        }
+
+        // Try to call emergency number (112 in India)
+        try {
+            val emergencyIntent = Intent(Intent.ACTION_CALL).apply {
+                data = Uri.parse("tel:112")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            appContext.startActivity(emergencyIntent)
+            results.add("Calling emergency number 112")
+        } catch (e: SecurityException) {
+            // No CALL_PHONE permission — open dialer
+            try {
+                val dialIntent = Intent(Intent.ACTION_DIAL).apply {
+                    data = Uri.parse("tel:112")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                appContext.startActivity(dialIntent)
+                results.add("Opening emergency dialer")
+            } catch (_: Exception) {
+                results.add("Could not open emergency dialer")
+            }
+        } catch (_: Exception) {
+            results.add("Could not call emergency number")
+        }
+
+        return "Emergency SOS activated! ${results.joinToString(". ")}."
+    }
+
+    private fun getFirstContactNumber(): String? {
+        return try {
+            val uri = ContactsContract.CommonDataKinds.Phone.CONTENT_URI
+            val projection = arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER)
+            appContext.contentResolver.query(uri, projection, null, null, "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} ASC")?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    cursor.getString(0)
+                } else null
+            }
+        } catch (_: Exception) { null }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // EXPENSE TRACKER — Add and read expenses
+    // ══════════════════════════════════════════════════════════════════════
+
+    private suspend fun handleExpense(action: String, params: Map<String, String>): String {
+        return when {
+            action.contains("read") || action.contains("total") || action.contains("show") || action.contains("dikhao") ->
+                readExpenses(params)
+            else -> addExpense(params)
+        }
+    }
+
+    private suspend fun addExpense(params: Map<String, String>): String {
+        return try {
+            val amount = params["amount"]?.toDoubleOrNull() ?: 0.0
+            if (amount <= 0) return "Please tell me the expense amount. For example: 'expense add 500 rupees food'"
+
+            val category = params["category"] ?: "other"
+            val description = params["description"] ?: params["note"] ?: ""
+
+            val expense = ExpenseEntity(
+                amount = amount,
+                category = category,
+                description = description,
+                timestamp = System.currentTimeMillis()
+            )
+            expenseDao.insert(expense)
+            "Expense added: ₹$amount for $category${if (description.isNotBlank()) " ($description)" else ""}."
+        } catch (e: Exception) {
+            "Couldn't add expense. ${e.message}"
+        }
+    }
+
+    private suspend fun readExpenses(params: Map<String, String>): String {
+        return try {
+            val now = System.currentTimeMillis()
+            val oneDayMs = 86400000L
+            val oneWeekMs = 7 * oneDayMs
+
+            // Determine time range
+            val fromTimestamp = when {
+                params.containsKey("week") -> now - oneWeekMs
+                params.containsKey("month") -> now - 30 * oneDayMs
+                else -> now - oneDayMs // Default: today
+            }
+
+            val expenses = expenseDao.getSince(fromTimestamp)
+            val total = expenseDao.getTotalSince(fromTimestamp) ?: 0.0
+            val categoryTotals = expenseDao.getTotalByCategorySince(fromTimestamp)
+
+            if (expenses.isEmpty()) {
+                return "No expenses recorded yet. Tell me something like 'expense add 200 rupees food'."
+            }
+
+            val categoryBreakdown = if (categoryTotals.isNotEmpty()) {
+                categoryTotals.mapIndexed { i, ct -> "${i + 1}. ${ct.category}: ₹${String.format("%.0f", ct.total)}" }.joinToString(". ")
+            } else ""
+
+            val recentExpenses = expenses.take(5).mapIndexed { i, e ->
+                "${i + 1}. ₹${String.format("%.0f", e.amount)} - ${e.category}${if (e.description.isNotBlank()) " (${e.description})" else ""}"
+            }.joinToString(". ")
+
+            "Total expenses: ₹${String.format("%.0f", total)}. Breakdown: $categoryBreakdown. Recent: $recentExpenses"
+        } catch (e: Exception) {
+            "Couldn't read expenses. ${e.message}"
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // USER MEMORY — Long-term memory for personal info
+    // ══════════════════════════════════════════════════════════════════════
+
+    private suspend fun saveUserMemory(input: String) {
+        try {
+            val lower = input.lowercase()
+
+            // Detect personal info patterns and save to memory
+            // Name: "mera naam Aadarsh hai", "my name is Aadarsh"
+            val namePatterns = listOf(
+                Regex("(?i)mera\s+naam\s+(\w+)\s+hai"),
+                Regex("(?i)my\s+name\s+is\s+(\w+)"),
+                Regex("(?i)i'?m\s+(\w+)(?:\s+and)?")
+            )
+            for (pattern in namePatterns) {
+                val match = pattern.find(lower)
+                if (match != null) {
+                    val name = match.groupValues[1].trim().replaceFirstChar { it.uppercase() }
+                    if (name.length > 1 && name !in listOf("not", "very", "so", "also", "just", "fine", "good", "okay", "doing", "from")) {
+                        val existing = userMemoryDao.getByKey("user_name")
+                        if (existing == null || existing.value != name) {
+                            userMemoryDao.insert(UserMemoryEntity(category = "name", key = "user_name", value = name))
+                        }
+                    }
+                    break
+                }
+            }
+
+            // Location: "I live in Patna", "mai Patna me rehta hun"
+            val locationPatterns = listOf(
+                Regex("(?i)(?:i\s+live\s+in|mai\s+)(\w+)(?:\s+me\s+reht|hun)?"),
+                Regex("(?i)mera\s+(?:ghar|city|shehar)\s+(\w+)\s+(?:hai|me)?")
+            )
+            for (pattern in locationPatterns) {
+                val match = pattern.find(lower)
+                if (match != null) {
+                    val city = match.groupValues[1].trim().replaceFirstChar { it.uppercase() }
+                    if (city.length > 1) {
+                        userMemoryDao.insert(UserMemoryEntity(category = "location", key = "home_city", value = city))
+                    }
+                    break
+                }
+            }
+
+            // General memory: "yaad rakhna ...", "remember that ..."
+            val memoryPatterns = listOf(
+                Regex("(?i)(?:yaad\s+rakhna?|remember\s+(?:that|this))?\s*(.+)")
+            )
+            for (pattern in memoryPatterns) {
+                val match = pattern.find(input)
+                if (match != null && lower.contains("yaad") || lower.contains("remember")) {
+                    val fact = match.groupValues[1].trim()
+                    if (fact.length > 2) {
+                        userMemoryDao.insert(UserMemoryEntity(category = "fact", key = "memory_${System.currentTimeMillis()}", value = fact))
+                    }
+                    break
+                }
+            }
+
+            // Preference: "mujhe ... pasand hai", "I like ..."
+            val likePatterns = listOf(
+                Regex("(?i)mujhe\s+(.+?)\s+pasand\s+hai"),
+                Regex("(?i)i\s+(?:like|love|prefer)\s+(.+?)(?:\.|$)")
+            )
+            for (pattern in likePatterns) {
+                val match = pattern.find(lower)
+                if (match != null) {
+                    val preference = match.groupValues[1].trim()
+                    if (preference.length > 1) {
+                        userMemoryDao.insert(UserMemoryEntity(category = "preference", key = "pref_${System.currentTimeMillis()}", value = preference))
+                    }
+                    break
+                }
+            }
+        } catch (_: Exception) { }
+    }
+
+    private suspend fun readUserMemories(): String {
+        return try {
+            val memories = userMemoryDao.getAll()
+            if (memories.isEmpty()) return ""
+            memories.map { "${it.key}: ${it.value}" }.joinToString(". ")
+        } catch (_: Exception) { "" }
+    }
+
     private fun launchWebSearch(query: String): String {
         if (query.isBlank()) return "What would you like to search for?"
         return try {
@@ -1824,6 +2090,9 @@ class MahiViewModel @Inject constructor(
             return "I need an AI API key to respond. Please go to Settings and enter your Gemini API key (free from aistudio.google.com) or your Grok API key.\n\nNote: Device commands like calling, SMS, flashlight, time, battery, weather, news, etc. still work without an API key!"
         }
 
+        // Try to extract and save user memory from this input
+        try { saveUserMemory(input) } catch (_: Exception) { }
+
         return try {
             // Pass last 50 messages as context for STRONG memory
             val history = _messages.value.takeLast(50).map {
@@ -1833,7 +2102,19 @@ class MahiViewModel @Inject constructor(
                     timestamp = it.timestamp
                 )
             }
-            aiEngine.chatWithMemory(input, history)
+
+            // Include user memories in context for personalization
+            val memories = readUserMemories()
+            val contextPrefix = if (memories.isNotBlank()) {
+                com.mahi.assistant.ai.ChatMessage(
+                    role = com.mahi.assistant.ai.ChatMessage.ROLE_MODEL,
+                    content = "[System: User memories - $memories]",
+                    timestamp = 0L
+                )
+            } else null
+
+            val fullHistory = if (contextPrefix != null) listOf(contextPrefix) + history else history
+            aiEngine.chatWithMemory(input, fullHistory)
         } catch (e: Exception) {
             val errorMsg = e.message ?: ""
             if (errorMsg.contains("API key", ignoreCase = true) ||
