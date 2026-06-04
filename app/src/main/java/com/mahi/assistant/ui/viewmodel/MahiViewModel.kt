@@ -3,7 +3,10 @@ package com.mahi.assistant.ui.viewmodel
 import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.ComponentName
+import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
 import android.hardware.camera2.CameraManager
@@ -17,6 +20,7 @@ import android.provider.AlarmClock
 import android.provider.CalendarContract
 import android.provider.CallLog
 import android.provider.ContactsContract
+import android.provider.MediaStore
 import android.provider.Settings
 import android.telephony.SmsManager
 import android.text.format.DateUtils
@@ -851,8 +855,19 @@ class MahiViewModel @Inject constructor(
             IntentClassifier.IntentType.TRANSLATE -> handleTranslation(intent.params["text"] ?: originalInput, intent.params["target_lang"] ?: "")
             IntentClassifier.IntentType.CALCULATE -> handleCalculation(intent.params["expression"] ?: originalInput)
             IntentClassifier.IntentType.CONTINUOUS_MODE -> toggleContinuousMode(intent.action)
-            IntentClassifier.IntentType.CAMERA -> openCamera()
+            IntentClassifier.IntentType.CAMERA -> openCamera(if (intent.action == "video_camera") "video_camera" else "photo")
             IntentClassifier.IntentType.FILE_OPEN -> openFileManager()
+            IntentClassifier.IntentType.WHATSAPP_CALL -> launchWhatsAppCall(intent.params["contact"] ?: "")
+            IntentClassifier.IntentType.WHATSAPP_VIDEO_CALL -> launchWhatsAppVideoCall(intent.params["contact"] ?: "")
+            IntentClassifier.IntentType.CONTACT_SAVE -> saveContact(intent.params["contact"] ?: "", intent.params["number"] ?: "")
+            IntentClassifier.IntentType.CONTACT_DELETE -> deleteContact(intent.params["contact"] ?: "")
+            IntentClassifier.IntentType.CONTACTS_SHOW -> showContacts()
+            IntentClassifier.IntentType.GESTURE -> handleGesture(intent.action, intent.params)
+            IntentClassifier.IntentType.ACCESSIBILITY -> handleAccessibility(intent.action, intent.params)
+            IntentClassifier.IntentType.CLIPBOARD -> handleClipboard(intent.action)
+            IntentClassifier.IntentType.SCREENSHOT -> takeScreenshot()
+            IntentClassifier.IntentType.DEVICE_INFO -> getDeviceInfo()
+            IntentClassifier.IntentType.NAVIGATION -> handleNavigation(intent.action, intent.params)
             else -> fetchAiResponse(originalInput)
         }
     }
@@ -1698,27 +1713,38 @@ class MahiViewModel @Inject constructor(
     // CAMERA — NEW: Open camera app or take photo
     // ══════════════════════════════════════════════════════════════════════
 
-    private fun openCamera(): String {
+    private fun openCamera(mode: String = "photo"): String {
         return try {
-            val intent = Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            if (intent.resolveActivity(appContext.packageManager) != null) {
-                appContext.startActivity(intent)
-                "Opening camera."
-            } else {
-                // Fallback: launch camera app by package name
-                val cameraIntent = appContext.packageManager.getLaunchIntentForPackage("com.android.camera")
-                if (cameraIntent != null) {
-                    cameraIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    appContext.startActivity(cameraIntent)
+            when (mode) {
+                "video_camera" -> {
+                    val intent = Intent(MediaStore.INTENT_ACTION_VIDEO_CAMERA).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    appContext.startActivity(intent)
+                    "Opening video camera."
+                }
+                else -> {
+                    val intent = Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    appContext.startActivity(intent)
                     "Opening camera."
-                } else {
-                    "Couldn't find a camera app on your device."
                 }
             }
         } catch (e: Exception) {
-            "Couldn't open camera. ${e.message}"
+            // Fallback: launch by package
+            try {
+                val launchIntent = appContext.packageManager.getLaunchIntentForPackage("com.android.camera")
+                if (launchIntent != null) {
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    appContext.startActivity(launchIntent)
+                    "Opening camera."
+                } else {
+                    "Couldn't open camera."
+                }
+            } catch (e2: Exception) {
+                "Couldn't open camera. ${e2.message}"
+            }
         }
     }
 
@@ -1894,7 +1920,54 @@ class MahiViewModel @Inject constructor(
 
     private fun launchApp(appName: String): String {
         if (appName.isBlank()) return "Which app would you like me to open?"
-        val packageName = appPackageMap[appName.lowercase().trim()]
+        val lowerAppName = appName.lowercase().trim()
+
+        // Special settings intents
+        when (lowerAppName) {
+            "wifi_settings" -> {
+                return try {
+                    val intent = Intent(Settings.ACTION_WIFI_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                    appContext.startActivity(intent)
+                    "Opening WiFi settings."
+                } catch (e: Exception) { "Couldn't open WiFi settings. ${e.message}" }
+            }
+            "bluetooth_settings" -> {
+                return try {
+                    val intent = Intent(Settings.ACTION_BLUETOOTH_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                    appContext.startActivity(intent)
+                    "Opening Bluetooth settings."
+                } catch (e: Exception) { "Couldn't open Bluetooth settings. ${e.message}" }
+            }
+            "sound_settings" -> {
+                return try {
+                    val intent = Intent(Settings.ACTION_SOUND_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                    appContext.startActivity(intent)
+                    "Opening Sound settings."
+                } catch (e: Exception) { "Couldn't open Sound settings. ${e.message}" }
+            }
+            "display_settings" -> {
+                return try {
+                    val intent = Intent(Settings.ACTION_DISPLAY_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                    appContext.startActivity(intent)
+                    "Opening Display settings."
+                } catch (e: Exception) { "Couldn't open Display settings. ${e.message}" }
+            }
+            "battery_settings" -> {
+                return try {
+                    val intent = Intent(Intent.ACTION_POWER_USAGE_SUMMARY).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                    appContext.startActivity(intent)
+                    "Opening Battery settings."
+                } catch (e: Exception) {
+                    try {
+                        val intent = Intent(Settings.ACTION_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                        appContext.startActivity(intent)
+                        "Opening Settings."
+                    } catch (e2: Exception) { "Couldn't open Battery settings." }
+                }
+            }
+        }
+
+        val packageName = appPackageMap[lowerAppName]
 
         return try {
             if (packageName != null) {
@@ -2365,6 +2438,77 @@ class MahiViewModel @Inject constructor(
     private suspend fun handleDeviceControl(intent: IntentClassifier.IntentResult): String {
         val action = intent.action ?: return "I couldn't understand which device to control."
         val lowerAction = action.lowercase()
+        val params = intent.params
+
+        // Handle special device control actions that don't fit the toggle pattern
+        when (lowerAction) {
+            "airplane_on" -> {
+                return try {
+                    val intent = Intent(Settings.ACTION_AIRPLANE_MODE_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                    appContext.startActivity(intent)
+                    "Opening Airplane Mode settings. Please toggle it manually."
+                } catch (e: Exception) { "Couldn't open airplane mode settings. ${e.message}" }
+            }
+            "airplane_off" -> {
+                return try {
+                    val intent = Intent(Settings.ACTION_AIRPLANE_MODE_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                    appContext.startActivity(intent)
+                    "Opening Airplane Mode settings. Please toggle it manually."
+                } catch (e: Exception) { "Couldn't open airplane mode settings. ${e.message}" }
+            }
+            "silent_mode" -> {
+                return try {
+                    val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        try { audioManager.ringerMode = AudioManager.RINGER_MODE_SILENT } catch (_: Exception) {}
+                    }
+                    "Phone set to silent mode."
+                } catch (e: Exception) {
+                    try {
+                        val intent = Intent(Settings.ACTION_SOUND_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                        appContext.startActivity(intent)
+                        "Opening sound settings for silent mode."
+                    } catch (e2: Exception) { "Couldn't set silent mode. ${e2.message}" }
+                }
+            }
+            "vibrate_mode" -> {
+                return try {
+                    val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                    audioManager.ringerMode = AudioManager.RINGER_MODE_VIBRATE
+                    "Phone set to vibrate mode."
+                } catch (e: Exception) {
+                    try {
+                        val intent = Intent(Settings.ACTION_SOUND_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                        appContext.startActivity(intent)
+                        "Opening sound settings for vibrate mode."
+                    } catch (e2: Exception) { "Couldn't set vibrate mode. ${e2.message}" }
+                }
+            }
+            "normal_mode" -> {
+                return try {
+                    val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                    audioManager.ringerMode = AudioManager.RINGER_MODE_NORMAL
+                    "Phone set to normal mode."
+                } catch (e: Exception) {
+                    try {
+                        val intent = Intent(Settings.ACTION_SOUND_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                        appContext.startActivity(intent)
+                        "Opening sound settings."
+                    } catch (e2: Exception) { "Couldn't set normal mode. ${e2.message}" }
+                }
+            }
+            "set_volume" -> {
+                val level = params["level"]?.toIntOrNull()
+                if (level == null) return "What volume level? Say a number like 50 or 70."
+                return try {
+                    val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                    val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                    val targetVolume = (maxVolume * level / 100).coerceIn(0, maxVolume)
+                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVolume, 0)
+                    "Volume set to $level%."
+                } catch (e: Exception) { "Couldn't set volume. ${e.message}" }
+            }
+        }
 
         // Parse device and state from action string
         // Formats: "flashlight_on", "wifi_off", "brightness_70", "volume_50", "toggle_flashlight", etc.
@@ -2504,6 +2648,82 @@ class MahiViewModel @Inject constructor(
 
     private suspend fun executeRoutine(name: String?): String {
         if (name == null) return "No routine specified."
+        val lowerName = name.lowercase()
+
+        // Handle inline routine actions
+        when (lowerName) {
+            "good_night" -> {
+                return try {
+                    val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                    audioManager.ringerMode = AudioManager.RINGER_MODE_SILENT
+                    // Try to set DND
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        try { audioManager.ringerMode = AudioManager.RINGER_MODE_SILENT } catch (_: Exception) {}
+                    }
+                    // Reduce brightness
+                    try {
+                        val brightness = android.provider.Settings.System.getInt(appContext.contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS)
+                        val newBrightness = (brightness * 0.2).toInt().coerceIn(10, 255)
+                        android.provider.Settings.System.putInt(appContext.contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS, newBrightness)
+                    } catch (_: Exception) {}
+                    "Good night, Boss! Silent mode on, brightness dimmed. Sleep well!"
+                } catch (e: Exception) { "Good night! I had some trouble adjusting settings. ${e.message}" }
+            }
+            "good_morning" -> {
+                return try {
+                    val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                    audioManager.ringerMode = AudioManager.RINGER_MODE_NORMAL
+                    // Increase brightness
+                    try {
+                        android.provider.Settings.System.putInt(appContext.contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS, 180)
+                    } catch (_: Exception) {}
+                    "Good morning, Boss! Normal mode on, brightness up. Ready to conquer the day!"
+                } catch (e: Exception) { "Good morning! I had some trouble adjusting settings. ${e.message}" }
+            }
+            "work_mode" -> {
+                return try {
+                    val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                    audioManager.ringerMode = AudioManager.RINGER_MODE_VIBRATE
+                    // Open Gmail and Chrome
+                    try {
+                        val gmailIntent = appContext.packageManager.getLaunchIntentForPackage("com.google.android.gm")
+                        if (gmailIntent != null) { gmailIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); appContext.startActivity(gmailIntent) }
+                    } catch (_: Exception) {}
+                    "Work mode activated! Vibrate mode on. Get productive, Boss!"
+                } catch (e: Exception) { "Work mode! I had some trouble adjusting settings. ${e.message}" }
+            }
+            "driving_mode" -> {
+                return try {
+                    val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                    // DND on
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        try { audioManager.ringerMode = AudioManager.RINGER_MODE_SILENT } catch (_: Exception) {}
+                    }
+                    // Brightness full
+                    try {
+                        android.provider.Settings.System.putInt(appContext.contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS, 255)
+                    } catch (_: Exception) {}
+                    // Open Maps
+                    try {
+                        val mapsIntent = appContext.packageManager.getLaunchIntentForPackage("com.google.android.apps.maps")
+                        if (mapsIntent != null) { mapsIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); appContext.startActivity(mapsIntent) }
+                    } catch (_: Exception) {}
+                    "Driving mode on! Stay safe on the road, Boss!"
+                } catch (e: Exception) { "Driving mode! Had some trouble. ${e.message}" }
+            }
+            "meeting_mode" -> {
+                return try {
+                    val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                    audioManager.ringerMode = AudioManager.RINGER_MODE_SILENT
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        try { audioManager.ringerMode = AudioManager.RINGER_MODE_SILENT } catch (_: Exception) {}
+                    }
+                    "Meeting mode on! Silent mode activated. Your phone won't disturb anyone."
+                } catch (e: Exception) { "Meeting mode! Had some trouble. ${e.message}" }
+            }
+        }
+
+        // Default: delegate to routine engine
         return try {
             routineEngine.executeRoutine(name)
             navigateTo("routines")
@@ -2515,6 +2735,402 @@ class MahiViewModel @Inject constructor(
         val notifs = _notifications.value.take(5)
         return if (notifs.isEmpty()) "No recent notifications."
         else "Recent notifications: ${notifs.mapIndexed { i, n -> "${i + 1}. ${n.appName}: ${n.title}" }.joinToString(". ")}"
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // WHATSAPP CALL — Voice and Video calls via WhatsApp
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun launchWhatsAppCall(contact: String): String {
+        if (contact.isBlank() || contact == "unknown") return "Who would you like to call on WhatsApp? Say a name."
+        return try {
+            val phoneNumber = lookupContactPhoneNumber(contact)
+            if (phoneNumber != null) {
+                val cleanNumber = phoneNumber.replace(Regex("[^\\d]"), "")
+                val intent = Intent(Intent.ACTION_VIEW).apply {
+                    data = Uri.parse("https://wa.me/$cleanNumber")
+                    setPackage("com.whatsapp")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                appContext.startActivity(intent)
+                "Opening WhatsApp call with $contact."
+            } else {
+                // Try opening WhatsApp directly
+                val launchIntent = appContext.packageManager.getLaunchIntentForPackage("com.whatsapp")
+                if (launchIntent != null) {
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    appContext.startActivity(launchIntent)
+                    "Opening WhatsApp. I couldn't find $contact in your contacts."
+                } else {
+                    "WhatsApp is not installed."
+                }
+            }
+        } catch (e: Exception) {
+            "Couldn't make WhatsApp call. ${e.message}"
+        }
+    }
+
+    private fun launchWhatsAppVideoCall(contact: String): String {
+        if (contact.isBlank() || contact == "unknown") return "Who would you like to video call on WhatsApp? Say a name."
+        return try {
+            val phoneNumber = lookupContactPhoneNumber(contact)
+            if (phoneNumber != null) {
+                val cleanNumber = phoneNumber.replace(Regex("[^\\d]"), "")
+                // Open WhatsApp chat - user can tap video call from there
+                val intent = Intent(Intent.ACTION_VIEW).apply {
+                    data = Uri.parse("https://wa.me/$cleanNumber")
+                    setPackage("com.whatsapp")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                appContext.startActivity(intent)
+                "Opening WhatsApp video call with $contact."
+            } else {
+                val launchIntent = appContext.packageManager.getLaunchIntentForPackage("com.whatsapp")
+                if (launchIntent != null) {
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    appContext.startActivity(launchIntent)
+                    "Opening WhatsApp. I couldn't find $contact."
+                } else {
+                    "WhatsApp is not installed."
+                }
+            }
+        } catch (e: Exception) {
+            "Couldn't make WhatsApp video call. ${e.message}"
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // CONTACT MANAGEMENT — Save, Delete, Show contacts
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun saveContact(contact: String, number: String): String {
+        if (contact.isBlank()) return "Which contact should I save? Tell me the name and number."
+        if (number.isBlank()) return "What number should I save for $contact?"
+        return try {
+            val intent = Intent(Intent.ACTION_INSERT).apply {
+                type = ContactsContract.Contacts.CONTENT_TYPE
+                putExtra(ContactsContract.Intents.Insert.NAME, contact)
+                putExtra(ContactsContract.Intents.Insert.PHONE, number)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            appContext.startActivity(intent)
+            "Opening contact save screen for $contact, number $number."
+        } catch (e: Exception) {
+            "Couldn't save contact. ${e.message}"
+        }
+    }
+
+    private fun deleteContact(contact: String): String {
+        if (contact.isBlank()) return "Which contact should I delete?"
+        return try {
+            // Open contact details for user to delete manually (safer)
+            val phoneNumber = lookupContactPhoneNumber(contact)
+            if (phoneNumber != null) {
+                val uri = Uri.withAppendedPath(ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode(phoneNumber))
+                val cursor = appContext.contentResolver.query(uri, arrayOf(ContactsContract.PhoneLookup._ID), null, null, null)
+                if (cursor != null && cursor.moveToFirst()) {
+                    val contactId = cursor.getLong(cursor.getColumnIndexOrThrow(ContactsContract.PhoneLookup._ID))
+                    cursor.close()
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        data = ContentUris.withAppendedId(ContactsContract.Contacts.CONTENT_URI, contactId)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    appContext.startActivity(intent)
+                    "Opening $contact's contact card. You can delete from the menu."
+                } else {
+                    cursor?.close()
+                    "I found $contact but couldn't open their details for deletion."
+                }
+            } else {
+                "I couldn't find $contact in your contacts."
+            }
+        } catch (e: Exception) {
+            "Couldn't delete contact. ${e.message}"
+        }
+    }
+
+    private fun showContacts(): String {
+        return try {
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                type = ContactsContract.Contacts.CONTENT_TYPE
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            appContext.startActivity(intent)
+            "Opening your contacts list."
+        } catch (e: Exception) {
+            "Couldn't open contacts. ${e.message}"
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // GESTURE — Accessibility-based gesture control
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun handleGesture(action: String, params: Map<String, String>): String {
+        val accessibilityService = com.mahi.assistant.service.MahiAccessibilityService.instance
+        return when (action) {
+            "scroll_down" -> {
+                try { accessibilityService?.performScrollDown() } catch (_: Exception) {}
+                try { if (accessibilityService == null) performGlobalAction("scroll_down") } catch (_: Exception) {}
+                "Scrolling down."
+            }
+            "scroll_up" -> {
+                try { accessibilityService?.performScrollUp() } catch (_: Exception) {}
+                try { if (accessibilityService == null) performGlobalAction("scroll_up") } catch (_: Exception) {}
+                "Scrolling up."
+            }
+            "swipe_left" -> {
+                try { accessibilityService?.performSwipeLeft() } catch (_: Exception) {}
+                "Swiping left."
+            }
+            "swipe_right" -> {
+                try { accessibilityService?.performSwipeRight() } catch (_: Exception) {}
+                "Swiping right."
+            }
+            "go_back" -> {
+                performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
+                "Going back."
+            }
+            "go_home" -> {
+                performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME)
+                "Going to home screen."
+            }
+            "recent_apps" -> {
+                performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_RECENTS)
+                "Showing recent apps."
+            }
+            "open_notifications" -> {
+                performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS)
+                "Opening notifications."
+            }
+            "quick_settings" -> {
+                performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_QUICK_SETTINGS)
+                "Opening quick settings."
+            }
+            "lock_screen" -> {
+                performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN)
+                "Locking screen."
+            }
+            else -> "I don't know how to perform that gesture yet."
+        }
+    }
+
+    private fun performGlobalAction(action: Int): Boolean {
+        val service = com.mahi.assistant.service.MahiAccessibilityService.instance
+        return if (service != null) {
+            service.performGlobalAction(action)
+        } else {
+            false
+        }
+    }
+
+    // Fallback for when accessibility service is not available
+    private fun performGlobalAction(actionName: String) {
+        // These require accessibility service - no fallback possible for most
+        // But for HOME and BACK we can try intent-based approaches
+        try {
+            when (actionName) {
+                "go_home" -> {
+                    val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+                        addCategory(Intent.CATEGORY_HOME)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    appContext.startActivity(homeIntent)
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MahiViewModel", "Gesture action failed: $actionName", e)
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // ACCESSIBILITY — Click, Type, Screen Read via Accessibility Service
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun handleAccessibility(action: String, params: Map<String, String>): String {
+        val accessibilityService = com.mahi.assistant.service.MahiAccessibilityService.instance
+        return when (action) {
+            "click_text" -> {
+                val text = params["text"] ?: ""
+                if (text.isBlank()) return "What should I click? Tell me the text on the button."
+                if (accessibilityService != null) {
+                    val clicked = try { accessibilityService.clickOnText(text) } catch (_: Exception) { false }
+                    if (clicked) "Clicked on $text." else "I couldn't find '$text' on the screen."
+                } else {
+                    "I need the Accessibility Service enabled to click on screen elements. Please enable it in Settings."
+                }
+            }
+            "click_button" -> {
+                if (accessibilityService != null) {
+                    val clicked = try { accessibilityService.clickAnyButton() } catch (_: Exception) { false }
+                    if (clicked) "Clicked the button." else "I couldn't find any button on the screen."
+                } else {
+                    "I need the Accessibility Service enabled to click buttons. Please enable it in Settings."
+                }
+            }
+            "type_text" -> {
+                val text = params["text"] ?: ""
+                if (text.isBlank()) return "What should I type?"
+                if (accessibilityService != null) {
+                    try { accessibilityService.typeText(text) } catch (_: Exception) {}
+                    "Typed '$text'."
+                } else {
+                    "I need the Accessibility Service enabled to type. Please enable it in Settings."
+                }
+            }
+            "screen_read" -> {
+                if (accessibilityService != null) {
+                    val content = try { accessibilityService.readScreenContent() } catch (_: Exception) { "" }
+                    if (content.isNotBlank()) "Screen content: ${content.take(500)}" else "I couldn't read anything on the screen."
+                } else {
+                    "I need the Accessibility Service enabled to read the screen. Please enable it in Settings."
+                }
+            }
+            else -> "I don't know how to perform that action yet."
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // CLIPBOARD — Copy, Paste, Read clipboard
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun handleClipboard(action: String): String {
+        val clipboard = appContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        return when (action) {
+            "copy" -> {
+                // Copy last assistant message to clipboard
+                val lastAssistantMsg = _messages.value.lastOrNull { it.role == MessageRole.ASSISTANT }?.content ?: ""
+                if (lastAssistantMsg.isNotBlank()) {
+                    val clip = ClipData.newPlainText("MAHI Response", lastAssistantMsg)
+                    clipboard.setPrimaryClip(clip)
+                    "Copied to clipboard."
+                } else {
+                    "Nothing to copy yet."
+                }
+            }
+            "paste" -> {
+                val clip = clipboard.primaryClip
+                if (clip != null && clip.itemCount > 0) {
+                    val text = clip.getItemAt(0)?.text?.toString() ?: ""
+                    if (text.isNotBlank()) "Clipboard content: $text" else "Clipboard is empty."
+                } else {
+                    "Clipboard is empty."
+                }
+            }
+            "read_clipboard" -> {
+                val clip = clipboard.primaryClip
+                if (clip != null && clip.itemCount > 0) {
+                    val text = clip.getItemAt(0)?.text?.toString() ?: ""
+                    if (text.isNotBlank()) "Clipboard contains: $text" else "Clipboard is empty."
+                } else {
+                    "Clipboard is empty."
+                }
+            }
+            else -> "Unknown clipboard action."
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // SCREENSHOT — Take screenshot via Accessibility Service
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun takeScreenshot(): String {
+        val accessibilityService = com.mahi.assistant.service.MahiAccessibilityService.instance
+        return if (accessibilityService != null) {
+            // Use accessibility service to take screenshot (API 24+)
+            try {
+                // Use global action for screenshot (API 28+)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    val result = accessibilityService.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_TAKE_SCREENSHOT)
+                    if (result) "Taking screenshot." else "Couldn't take screenshot."
+                } else {
+                    "Screenshot requires Android 9 or above."
+                }
+            } catch (e: Exception) {
+                "Couldn't take screenshot. ${e.message}"
+            }
+        } else {
+            "I need the Accessibility Service enabled to take screenshots. Please enable it in Settings."
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // DEVICE INFO — Get device information
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun getDeviceInfo(): String {
+        return try {
+            val manufacturer = Build.MANUFACTURER
+            val model = Build.MODEL
+            val androidVersion = Build.VERSION.RELEASE
+            val sdkVersion = Build.VERSION.SDK_INT
+            val batteryLevel = getBatteryPercentage()
+            val totalMemory = Runtime.getRuntime().totalMemory() / (1024 * 1024)
+            val freeMemory = Runtime.getRuntime().freeMemory() / (1024 * 1024)
+
+            "Device: $manufacturer $model. Android $androidVersion (API $sdkVersion). Battery: $batteryLevel%. Memory: ${freeMemory}MB free of ${totalMemory}MB."
+        } catch (e: Exception) {
+            "Couldn't get device info. ${e.message}"
+        }
+    }
+
+    private fun getBatteryPercentage(): Int {
+        return try {
+            val bm = appContext.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+            bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        } catch (e: Exception) {
+            -1
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // NAVIGATION — Google Maps navigation
+    // ══════════════════════════════════════════════════════════════════════
+
+    private fun handleNavigation(action: String, params: Map<String, String>): String {
+        return when (action) {
+            "navigate_to" -> {
+                val location = params["location"] ?: ""
+                if (location.isBlank()) return "Where would you like to navigate? Tell me the place."
+                try {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=${Uri.encode(location)}")).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    appContext.startActivity(intent)
+                    "Starting navigation to $location."
+                } catch (e: Exception) {
+                    // Fallback: open maps with search
+                    try {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://maps.google.com/?q=${Uri.encode(location)}")).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        appContext.startActivity(intent)
+                        "Opening maps for $location."
+                    } catch (e2: Exception) {
+                        "Couldn't navigate to $location. ${e2.message}"
+                    }
+                }
+            }
+            "open_maps" -> {
+                try {
+                    val launchIntent = appContext.packageManager.getLaunchIntentForPackage("com.google.android.apps.maps")
+                    if (launchIntent != null) {
+                        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        appContext.startActivity(launchIntent)
+                        "Opening Maps."
+                    } else {
+                        val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://maps.google.com")).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        appContext.startActivity(webIntent)
+                        "Opening Maps in browser."
+                    }
+                } catch (e: Exception) {
+                    "Couldn't open Maps. ${e.message}"
+                }
+            }
+            else -> "Unknown navigation action."
+        }
     }
 
     // ══════════════════════════════════════════════════════════════════════
