@@ -483,7 +483,11 @@ class MahiViewModel @Inject constructor(
     fun saveAllSettings() { _settingsState.value = _settingsState.value.copy(isSaved = true) }
 
     fun navigateTo(route: String) { _currentRoute.value = route }
-    fun startListening() { _partialTranscript.value = ""; voiceRecognition.startListening() }
+    fun startListening() {
+        _partialTranscript.value = ""
+        voiceRecognition.resetErrorCounter() // P5-FIX: Reset error counter on manual start
+        voiceRecognition.startListening()
+    }
     fun stopListening() { voiceRecognition.stopListening(); _isListening.value = false; _assistantState.value = AssistantState.IDLE }
     fun updateInput(text: String) { _currentInput.value = text }
 
@@ -538,9 +542,19 @@ class MahiViewModel @Inject constructor(
                 return@launch
             }
 
-            // Classify using AI-powered classifier (regex first, then Gemini)
-            val intent = intentClassifier.classify(input)
-            var response = handleIntent(intent, input)
+            // P1-FIX: Detect follow-up questions with pronouns — route directly to AI with context
+            // These MUST go to AI, not intent classification, because they need conversation context
+            val isFollowUpWithPronoun = isFollowUpQuestion(input)
+
+            var response: String
+            if (isFollowUpWithPronoun) {
+                // Follow-up with pronoun → AI with full context (bypasses intent classifier)
+                response = fetchAiResponse(input)
+            } else {
+                // Normal flow: classify using AI-powered classifier (regex first, then AI)
+                val intent = intentClassifier.classify(input)
+                response = handleIntent(intent, input)
+            }
 
             // Handle FALLBACK_TO_SEARCH from AI engine — never show to user
             if (response == "FALLBACK_TO_SEARCH") {
@@ -577,11 +591,68 @@ class MahiViewModel @Inject constructor(
 
             // Proactively save important user memories from this exchange
             try { saveUserMemory(input) } catch (_: Exception) { }
+            // P8-FIX: Also try to extract memory from the AI response
+            try { saveUserMemory(response) } catch (_: Exception) { }
 
             // Speak the response
             val speechText = response.replace(Regex("""\[\w+\]\s*"""), "").replace(Regex("""[*#_]"""), "").take(500)
             ttsEngine.speak(speechText, "response_${System.currentTimeMillis()}")
         }
+    }
+
+    /**
+     * P1-FIX: Detect if the input is a follow-up question that needs conversation context.
+     * These questions contain pronouns or references to previous topics — they MUST
+     * be routed directly to the AI with full conversation history, not through intent classification.
+     *
+     * Without this, "how old is he?" after "who is Elon Musk?" gets classified as
+     * GENERAL_CHAT but without the context that "he" = Elon Musk.
+     */
+    private fun isFollowUpQuestion(input: String): Boolean {
+        val lower = input.lowercase().trim()
+
+        // English pronoun patterns — ALWAYS need context
+        val pronounPatterns = listOf(
+            Regex("""(?i)\bhow old is (he|she|it|they|him|her)\b"""),
+            Regex("""(?i)\bwhere (was|is|did|does) (he|she|it|they|him|her)\b"""),
+            Regex("""(?i)\bwhen (was|is|did|does) (he|she|it|they|him|her)\b"""),
+            Regex("""(?i)\bwhat (was|is|did|does) (he|she|it|they|him|her)\b"""),
+            Regex("""(?i)\bwho is (he|she|it|they|him|her)\b"""),
+            Regex("""(?i)\bhow about (him|her|it|them)\b"""),
+            Regex("""(?i)\bwhat about (him|her|it|them)\b"""),
+            Regex("""(?i)\btell me more\b"""),
+            Regex("""(?i)\bwhat else\b"""),
+            Regex("""(?i)\band (his|her|its|their)\b"""),
+            Regex("""(?i)\b(his|her|its|their) (wife|husband|name|age|family|company|job|book|movie)\b"""),
+            Regex("""(?i)\bis (he|she|it|they) (still|also|really|even)\b"""),
+            Regex("""(?i)\bdoes (he|she|it|they) (have|own|like|know|work)\b"""),
+            Regex("""(?i)\bdid (he|she|it|they) (say|do|go|win|make|write)\b""")
+        )
+
+        // Hinglish pronoun patterns
+        val hinglishPatterns = listOf(
+            Regex("""(?i)\buska\b"""), Regex("""(?i)\buski\b"""), Regex("""(?i)\buske\b"""),
+            Regex("""(?i)\busko\b"""), Regex("""(?i)\buskó\b"""),
+            Regex("""(?i)\baur batao\b"""), Regex("""(?i)\baur kya\b"""),
+            Regex("""(?i)\baur kuch\b"""), Regex("""(?i)\bphir kya\b"""),
+            Regex("""(?i)\buska naam\b"""), Regex("""(?i)\buski umar\b"""),
+            Regex("""(?i)\buska kaam\b"""), Regex("""(?i)\buske baare\b"""),
+            Regex("""(?i)\bwo kaun\b"""), Regex("""(?i)\bwo kaisa\b""")
+        )
+
+        // Short questions that are likely follow-ups (less than 6 words with question words)
+        val isShortFollowUp = lower.split("\\s+".toRegex()).size <= 5 && (
+            lower.contains("who is he") || lower.contains("who is she") ||
+            lower.contains("how old") || lower.contains("where from") ||
+            lower.contains("what about") || lower.contains("how about") ||
+            lower.contains("tell me more") || lower.contains("and then") ||
+            lower.startsWith("he ") || lower.startsWith("she ") ||
+            lower.startsWith("it ") || lower.startsWith("they ")
+        )
+
+        return pronounPatterns.any { it.containsMatchIn(lower) } ||
+               hinglishPatterns.any { it.containsMatchIn(lower) } ||
+               isShortFollowUp
     }
 
     /**
@@ -2127,13 +2198,15 @@ class MahiViewModel @Inject constructor(
             val namePatterns = listOf(
                 Regex("""(?i)mera\s+naam\s+(\w+)\s+hai"""),
                 Regex("""(?i)my\s+name\s+is\s+(\w+)"""),
-                Regex("""(?i)i'?m\s+(\w+)(?:\s+and)?""")
+                Regex("""(?i)i'?m\s+(\w+)(?:\s+and)?"""),
+                Regex("""(?i)hum\s*(\w+)\s+hai"""),
+                Regex("""(?i)naam\s+hai\s+(\w+)""")
             )
             for (pattern in namePatterns) {
                 val match = pattern.find(lower)
                 if (match != null) {
                     val name = match.groupValues[1].trim().replaceFirstChar { it.uppercase() }
-                    if (name.length > 1 && name !in listOf("not", "very", "so", "also", "just", "fine", "good", "okay", "doing", "from")) {
+                    if (name.length > 1 && name !in listOf("not", "very", "so", "also", "just", "fine", "good", "okay", "doing", "from", "the", "a", "an", "going", "feeling", "sorry", "back", "here", "sure", "glad", "happy")) {
                         val existing = userMemoryDao.getByKey("user_name")
                         if (existing == null || existing.value != name) {
                             userMemoryDao.insert(UserMemoryEntity(category = "name", key = "user_name", value = name))
@@ -2146,14 +2219,52 @@ class MahiViewModel @Inject constructor(
             // Location: "I live in Patna", "mai Patna me rehta hun"
             val locationPatterns = listOf(
                 Regex("""(?i)(?:i\s+live\s+in|mai\s+)(\w+)(?:\s+me\s+reht|hun)?"""),
-                Regex("""(?i)mera\s+(?:ghar|city|shehar)\s+(\w+)\s+(?:hai|me)?""")
+                Regex("""(?i)mera\s+(?:ghar|city|shehar)\s+(\w+)\s+(?:hai|me)?"""),
+                Regex("""(?i)mai\s+(\w+)\s+me\s+rehta?\s+hun"""),
+                Regex("""(?i)i'?m\s+from\s+(\w+)"""),
+                Regex("""(?i)main\s+(\w+)\s+rahata?\s*hun""")
             )
             for (pattern in locationPatterns) {
                 val match = pattern.find(lower)
                 if (match != null) {
                     val city = match.groupValues[1].trim().replaceFirstChar { it.uppercase() }
-                    if (city.length > 1) {
+                    if (city.length > 1 && city !in listOf("The", "A", "An")) {
                         userMemoryDao.insert(UserMemoryEntity(category = "location", key = "home_city", value = city))
+                    }
+                    break
+                }
+            }
+
+            // P8-FIX: Job/occupation: "I am a developer", "mai engineer hun"
+            val jobPatterns = listOf(
+                Regex("""(?i)(?:i\s+am\s+a|mai\s+)(\w+)\s+(?:hun|hu|by\s+profession)?"""),
+                Regex("""(?i)i\s+work\s+(?:as\s+a|in)\s+(\w+)"""),
+                Regex("""(?i)mera\s+kaam\s+(?:hai|he)?\s*(\w+)""")
+            )
+            for (pattern in jobPatterns) {
+                val match = pattern.find(lower)
+                if (match != null) {
+                    val job = match.groupValues[1].trim().replaceFirstChar { it.uppercase() }
+                    if (job.length > 2 && job !in listOf("Not", "Very", "Also", "Just", "Fine", "Good", "Okay", "Doing", "From", "Here")) {
+                        userMemoryDao.insert(UserMemoryEntity(category = "occupation", key = "user_job", value = job))
+                    }
+                    break
+                }
+            }
+
+            // P8-FIX: Age: "I am 20 years old", "meri umar 20 hai"
+            val agePatterns = listOf(
+                Regex("""(?i)i\s+am\s+(\d+)\s+years?\s+old"""),
+                Regex("""(?i)meri?\s+umar?\s+(\d+)\s+hai"""),
+                Regex("""(?i)i'?m\s+(\d+)""")
+            )
+            for (pattern in agePatterns) {
+                val match = pattern.find(lower)
+                if (match != null) {
+                    val age = match.groupValues[1].trim()
+                    val ageNum = age.toIntOrNull()
+                    if (ageNum != null && ageNum in 5..120) {
+                        userMemoryDao.insert(UserMemoryEntity(category = "fact", key = "user_age", value = age))
                     }
                     break
                 }
@@ -2177,7 +2288,9 @@ class MahiViewModel @Inject constructor(
             // Preference: "mujhe ... pasand hai", "I like ..."
             val likePatterns = listOf(
                 Regex("""(?i)mujhe\s+(.+?)\s+pasand\s+hai"""),
-                Regex("""(?i)i\s+(?:like|love|prefer)\s+(.+?)(?:\.|$)""")
+                Regex("""(?i)i\s+(?:like|love|prefer)\s+(.+?)(?:\.|$)"""),
+                Regex("""(?i)mujhe\s+(.+?)\s+accha?\s+lagta?\s+hai"""),
+                Regex("""(?i)mera\s+favourite?\s+(.+?)\s+hai""")
             )
             for (pattern in likePatterns) {
                 val match = pattern.find(lower)
@@ -2192,11 +2305,25 @@ class MahiViewModel @Inject constructor(
         } catch (_: Exception) { }
     }
 
+    /**
+     * P8-FIX: Enhanced readUserMemories that returns more structured, useful context.
+     * Includes categorized memories with labels so the AI understands them better.
+     */
     private suspend fun readUserMemories(): String {
         return try {
             val memories = userMemoryDao.getAll()
             if (memories.isEmpty()) return ""
-            memories.map { "${it.key}: ${it.value}" }.joinToString(". ")
+            memories.map { m ->
+                when (m.category) {
+                    "name" -> "User's name is ${m.value}"
+                    "location" -> "User lives in ${m.value}"
+                    "occupation" -> "User's occupation is ${m.value}"
+                    "preference" -> "User likes/prefers ${m.value}"
+                    "fact" -> "Important fact: ${m.value}"
+                    "contact" -> "User's contact: ${m.value}"
+                    else -> "${m.key}: ${m.value}"
+                }
+            }.joinToString(". ")
         } catch (_: Exception) { "" }
     }
 
@@ -2410,7 +2537,8 @@ class MahiViewModel @Inject constructor(
         try { saveUserMemory(input) } catch (_: Exception) { }
 
         // ── STEP 1: Try AI with full context + memory ──────────────────
-        if (aiEngine.isConfigured()) {
+        // P2-FIX: Use isAnyPathAvailable() instead of isConfigured() — OpenRouter is always available!
+        if (aiEngine.isAnyPathAvailable()) {
             try {
                 // Build conversation context with last 50 messages for STRONG memory
                 val history = _messages.value.takeLast(50).map {
@@ -2505,11 +2633,12 @@ class MahiViewModel @Inject constructor(
         }
 
         // ── STEP 2: AI not configured or failed — Deep research pipeline ──
+        // P2-FIX: This should rarely be reached now because OpenRouter is always available
         return try {
             val researchResults = com.mahi.assistant.api.WebSearchService.deepResearch(input)
             if (researchResults.isNotBlank() && researchResults.length > 30) {
                 // If AI is available, use it to summarize the research
-                if (aiEngine.isConfigured()) {
+                if (aiEngine.isAnyPathAvailable()) {
                     try {
                         val summaryPrompt = buildString {
                             append("Based on the following web research, answer the user's question naturally and conversationally.\n\n")

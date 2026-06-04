@@ -55,6 +55,15 @@ class AiConversationEngine(
             "grok-2"
         )
 
+        // OpenRouter free models to try (3rd fallback)
+        val OPENROUTER_MODELS = listOf(
+            "google/gemini-2.0-flash-exp:free",
+            "meta-llama/llama-3.1-8b-instruct:free",
+            "mistralai/mistral-7b-instruct:free"
+        )
+
+        private const val OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/"
+
         // Maximum messages to pass as context — INCREASED for stronger memory
         private const val MAX_CONTEXT_MESSAGES = 50
 
@@ -224,6 +233,7 @@ IMPORTANT: If you can't directly do something, provide helpful guidance. NEVER s
 
     private val apiService: GeminiApiService = retrofit.create(GeminiApiService::class.java)
     private val grokService: GrokApiService = GrokClient.apiService
+    private val openRouterService: OpenRouterApiService = OpenRouterClient.apiService
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -267,6 +277,17 @@ IMPORTANT: If you can't directly do something, provide helpful guidance. NEVER s
     fun isGrokConfigured(): Boolean = getGrokApiKey().isNotBlank()
 
     fun isKeySet(): Boolean = getApiKey().isNotBlank() || getGrokApiKey().isNotBlank()
+
+    /**
+     * Check if OpenRouter is available (always true — free tier, no key needed).
+     */
+    fun isOpenRouterAvailable(): Boolean = true
+
+    /**
+     * OVERALL check: Is ANY path available to get an AI response?
+     * Gemini → Grok → OpenRouter (free) → Web Search = ALWAYS true
+     */
+    fun isAnyPathAvailable(): Boolean = true // OpenRouter free tier + web search always available
 
     fun clearHistory() { _conversationHistory.value = emptyList() }
 
@@ -392,12 +413,13 @@ IMPORTANT: If you can't directly do something, provide helpful guidance. NEVER s
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    // DUAL-BACKEND CALL — Gemini → Grok Auto-Fallback
+    // TRIPLE-BACKEND CALL — Gemini → Grok → OpenRouter Auto-Fallback
     // ══════════════════════════════════════════════════════════════════════
 
     /**
-     * Try Gemini first, then automatically fall back to Grok if Gemini fails.
-     * This is the CORE method that ensures MAHI always responds.
+     * Try Gemini → Grok → OpenRouter (free) → Web Search.
+     * This is the CORE method that ensures MAHI ALWAYS responds.
+     * NEVER returns FALLBACK_TO_SEARCH without trying all 3 backends.
      */
     private suspend fun callWithDualFallback(
         geminiRequest: GeminiRequest,
@@ -408,29 +430,49 @@ IMPORTANT: If you can't directly do something, provide helpful guidance. NEVER s
     ): String {
         // ── TRY GEMINI FIRST ──────────────────────────────────
         if (isGeminiConfigured()) {
-            val (response, geminiError) = callGeminiWithKeyFallback(geminiRequest)
-            if (response != null) {
-                val text = response.extractText()
-                if (!text.isNullOrBlank()) return text
+            try {
+                val (response, geminiError) = callGeminiWithKeyFallback(geminiRequest)
+                if (response != null) {
+                    val text = response.extractText()
+                    if (!text.isNullOrBlank()) return text
+                }
+                _lastError.value = "Gemini failed: $geminiError — trying Grok..."
+            } catch (e: Exception) {
+                _lastError.value = "Gemini exception: ${e.message?.take(50)} — trying Grok..."
             }
-            // Gemini failed — log and try Grok
-            _lastError.value = "Gemini failed: $geminiError — trying Grok fallback..."
         }
 
         // ── GROK FALLBACK ─────────────────────────────────────
         if (isGrokConfigured()) {
-            val grokMessages = chatMessages.toGrokMessages(systemPrompt)
-            val (grokText, grokError) = callGrokApi(
-                messages = grokMessages,
+            try {
+                val grokMessages = chatMessages.toGrokMessages(systemPrompt)
+                val (grokText, grokError) = callGrokApi(
+                    messages = grokMessages,
+                    temperature = temperature,
+                    maxTokens = maxTokens
+                )
+                if (grokText != null) return grokText
+                _lastError.value = "Grok failed: $grokError — trying OpenRouter..."
+            } catch (e: Exception) {
+                _lastError.value = "Grok exception: ${e.message?.take(50)} — trying OpenRouter..."
+            }
+        }
+
+        // ── OPENROUTER FALLBACK (FREE — no key needed!) ───────
+        try {
+            val orMessages = chatMessages.toGrokMessages(systemPrompt) // Same OpenAI format
+            val (orText, orError) = callOpenRouterApi(
+                messages = orMessages,
                 temperature = temperature,
                 maxTokens = maxTokens
             )
-            if (grokText != null) return grokText
-
-            _lastError.value = "Both AI backends failed. Gemini error + Grok: $grokError"
+            if (orText != null) return orText
+            _lastError.value = "OpenRouter failed: $orError"
+        } catch (e: Exception) {
+            _lastError.value = "OpenRouter exception: ${e.message?.take(50)}"
         }
 
-        // ── BOTH FAILED ── Fall back to web search gracefully
+        // ── ALL 3 FAILED ── Fall back to web search gracefully
         return "FALLBACK_TO_SEARCH"
     }
 
@@ -635,6 +677,46 @@ IMPORTANT: If you can't directly do something, provide helpful guidance. NEVER s
     }
 
     // ══════════════════════════════════════════════════════════════════════
+    // OPENROUTER — 3RD FALLBACK (FREE, no API key needed!)
+    // ══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Call OpenRouter API as 3rd fallback when both Gemini and Grok fail.
+     * Uses free models — no API key required!
+     * OpenRouter provides free access to several models.
+     */
+    private suspend fun callOpenRouterApi(
+        messages: List<GrokMessage>,
+        temperature: Double = 0.7,
+        maxTokens: Int = 512
+    ): Pair<String?, String?> {
+        for (model in OPENROUTER_MODELS) {
+            try {
+                val request = GrokRequest(
+                    model = model,
+                    messages = messages,
+                    temperature = temperature,
+                    max_tokens = maxTokens
+                )
+                val response = openRouterService.chatCompletions(request)
+                val text = response.extractText()
+                if (!text.isNullOrBlank()) return Pair(text, null)
+            } catch (e: HttpException) {
+                if (e.code() == 404) continue // Model not found, try next
+                if (e.code() == 429) {
+                    // Rate limited — try next model
+                    continue
+                }
+                // Other error — try next model
+                continue
+            } catch (e: Exception) {
+                continue // Try next model
+            }
+        }
+        return Pair(null, "ALL_OPENROUTER_MODELS_FAILED")
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
     // HELPERS
     // ══════════════════════════════════════════════════════════════════════
 
@@ -665,6 +747,7 @@ IMPORTANT: If you can't directly do something, provide helpful guidance. NEVER s
     private fun isFallbackError(error: String): Boolean {
         return error.contains("KEY_INVALID") || error.contains("ACCESS_DENIED") ||
                error.contains("ALL_GEMINI_KEYS_FAILED") || error.contains("ALL_GROK_MODELS_FAILED") ||
+               error.contains("ALL_OPENROUTER_MODELS_FAILED") ||
                error.contains("NO_GEMINI_KEY") || error.contains("NO_GROK_KEY") ||
                error.contains("internet connection") || error.contains("timed out") ||
                error.contains("Cannot connect") || error.contains("Connection error") ||

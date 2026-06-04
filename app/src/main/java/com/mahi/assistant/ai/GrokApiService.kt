@@ -95,3 +95,45 @@ object GrokClient {
         retrofit.create(GrokApiService::class.java)
     }
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// OpenRouter — FREE 3rd Fallback (no API key needed!)
+// ══════════════════════════════════════════════════════════════════════
+
+/**
+ * OpenRouter API Service — 3RD FALLBACK when Gemini + Grok both fail.
+ *
+ * OpenRouter provides FREE access to several AI models.
+ * No API key required for free models!
+ * API Docs: https://openrouter.ai/docs
+ */
+interface OpenRouterApiService {
+
+    @POST("chat/completions")
+    suspend fun chatCompletions(
+        @Body request: GrokRequest  // Same OpenAI-compatible format as Grok
+    ): GrokResponse
+}
+
+/**
+ * OpenRouter Client — manages the Retrofit instance.
+ */
+object OpenRouterClient {
+
+    private const val BASE_URL = "https://openrouter.ai/api/v1/"
+
+    private val gson: Gson = GsonBuilder()
+        .setLenient()
+        .create()
+
+    private val retrofit: Retrofit by lazy {
+        Retrofit.Builder()
+            .baseUrl(BASE_URL)
+            .addConverterFactory(GsonConverterFactory.create(gson))
+            .build()
+    }
+
+    val apiService: OpenRouterApiService by lazy {
+        retrofit.create(OpenRouterApiService::class.java)
+    }
+}

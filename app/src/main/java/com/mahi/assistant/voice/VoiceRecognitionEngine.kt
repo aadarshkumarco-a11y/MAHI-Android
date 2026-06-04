@@ -10,9 +10,11 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 /**
  * VoiceRecognitionEngine wraps Android's SpeechRecognizer API.
@@ -51,6 +53,11 @@ class VoiceRecognitionEngine(
     private var speechRecognizer: SpeechRecognizer? = null
     private var isRecognizerInitialized = false
 
+    // P5-FIX: Track restart attempts for robust continuous mode
+    private var consecutiveErrors = 0
+    private val MAX_CONSECUTIVE_ERRORS = 5
+    private var lastRestartTime = 0L
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     private val _partialResult = MutableStateFlow<String?>(null)
@@ -85,7 +92,15 @@ class VoiceRecognitionEngine(
         override fun onError(error: Int) {
             _isListening.value = false
             _partialResult.value = null
-            callback?.onError(error)
+            // P5-FIX: Track consecutive errors for robust restart
+            consecutiveErrors++
+            if (consecutiveErrors <= MAX_CONSECUTIVE_ERRORS) {
+                callback?.onError(error)
+            } else {
+                // Too many consecutive errors — stop trying and notify
+                Log.w("VoiceRecognition", "Max consecutive errors ($MAX_CONSECUTIVE_ERRORS) reached, stopping auto-restart")
+                callback?.onError(error)
+            }
         }
 
         override fun onResults(results: Bundle?) {
@@ -95,6 +110,8 @@ class VoiceRecognitionEngine(
             if (text.isNotEmpty()) {
                 _finalResult.value = text
                 _partialResult.value = null
+                // P5-FIX: Reset error counter on successful recognition
+                consecutiveErrors = 0
                 callback?.onResult(text)
             }
         }
@@ -143,12 +160,28 @@ class VoiceRecognitionEngine(
 
     /**
      * Start listening for speech input.
+     * P5-FIX: Added minimum delay between restarts to prevent rapid restart loops.
      */
     fun startListening() {
         if (!ensureRecognizerCreated()) {
             callback?.onError(SpeechRecognizer.ERROR_CLIENT)
             return
         }
+
+        // P5-FIX: Prevent rapid restart (minimum 300ms between starts)
+        val now = System.currentTimeMillis()
+        if (now - lastRestartTime < 300) {
+            Log.d("VoiceRecognition", "Too fast restart, delaying...")
+            scope.launch {
+                delay(300 - (now - lastRestartTime))
+                doStartListening()
+            }
+            return
+        }
+        doStartListening()
+    }
+
+    private fun doStartListening() {
 
         val recognizerIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
@@ -163,6 +196,7 @@ class VoiceRecognitionEngine(
 
         _partialResult.value = null
         _finalResult.value = null
+        lastRestartTime = System.currentTimeMillis()
 
         try {
             speechRecognizer?.startListening(recognizerIntent)
@@ -213,6 +247,15 @@ class VoiceRecognitionEngine(
         _partialResult.value = null
         _finalResult.value = null
         callback = null
+        consecutiveErrors = 0
+    }
+
+    /**
+     * P5-FIX: Reset the consecutive error counter.
+     * Call this when user explicitly starts listening (not auto-restart).
+     */
+    fun resetErrorCounter() {
+        consecutiveErrors = 0
     }
 
     companion object {

@@ -87,7 +87,7 @@ fun ChatScreen(
                         color = TextSecondary,
                     )
                     Spacer(modifier = Modifier.height(4.dp))
-                    // Show info if AI not configured — but web search still works!
+                    // P2-FIX: Always show that MAHI is ready — OpenRouter + Web Search always available
                     val settingsState by viewModel.settingsState.collectAsState()
                     if (!settingsState.isGeminiKeyValid) {
                         Spacer(modifier = Modifier.height(8.dp))
@@ -102,13 +102,13 @@ fun ChatScreen(
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Icon(
                                         imageVector = Icons.Filled.CheckCircle,
-                                        contentDescription = "Web Search Active",
+                                        contentDescription = "AI Ready",
                                         tint = NeonGreen,
                                         modifier = Modifier.size(16.dp)
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = "Web Search Active",
+                                        text = "AI Ready — Always Online",
                                         style = MaterialTheme.typography.labelMedium,
                                         color = NeonGreen,
                                         fontWeight = FontWeight.Bold
@@ -116,7 +116,7 @@ fun ChatScreen(
                                 }
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = "I can answer questions using Wikipedia + Web Search. Add a Gemini API key in Settings for smarter AI responses!",
+                                    text = "I can answer any question using AI + Web Search. Add a Gemini API key in Settings for even faster, smarter responses!",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = NeonGreen.copy(alpha = 0.7f),
                                 )
