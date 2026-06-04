@@ -2870,21 +2870,27 @@ class MahiViewModel @Inject constructor(
         val accessibilityService = com.mahi.assistant.service.MahiAccessibilityService.instance
         return when (action) {
             "scroll_down" -> {
-                try { accessibilityService?.performScrollDown() } catch (_: Exception) {}
-                try { if (accessibilityService == null) performGlobalAction("scroll_down") } catch (_: Exception) {}
+                if (accessibilityService != null) {
+                    try { accessibilityService.scrollDown() } catch (_: Exception) {}
+                }
                 "Scrolling down."
             }
             "scroll_up" -> {
-                try { accessibilityService?.performScrollUp() } catch (_: Exception) {}
-                try { if (accessibilityService == null) performGlobalAction("scroll_up") } catch (_: Exception) {}
+                if (accessibilityService != null) {
+                    try { accessibilityService.scrollUp() } catch (_: Exception) {}
+                }
                 "Scrolling up."
             }
             "swipe_left" -> {
-                try { accessibilityService?.performSwipeLeft() } catch (_: Exception) {}
+                if (accessibilityService != null) {
+                    try { accessibilityService.performAction("swipe_left") } catch (_: Exception) {}
+                }
                 "Swiping left."
             }
             "swipe_right" -> {
-                try { accessibilityService?.performSwipeRight() } catch (_: Exception) {}
+                if (accessibilityService != null) {
+                    try { accessibilityService.performAction("swipe_right") } catch (_: Exception) {}
+                }
                 "Swiping right."
             }
             "go_back" -> {
@@ -2962,7 +2968,12 @@ class MahiViewModel @Inject constructor(
             }
             "click_button" -> {
                 if (accessibilityService != null) {
-                    val clicked = try { accessibilityService.clickAnyButton() } catch (_: Exception) { false }
+                    val clicked = try {
+                        val elements = accessibilityService.getClickableElements()
+                        if (elements.isNotEmpty()) {
+                            accessibilityService.clickAt(elements[0].bounds.centerX(), elements[0].bounds.centerY())
+                        } else false
+                    } catch (_: Exception) { false }
                     if (clicked) "Clicked the button." else "I couldn't find any button on the screen."
                 } else {
                     "I need the Accessibility Service enabled to click buttons. Please enable it in Settings."
@@ -2971,16 +2982,20 @@ class MahiViewModel @Inject constructor(
             "type_text" -> {
                 val text = params["text"] ?: ""
                 if (text.isBlank()) return "What should I type?"
-                if (accessibilityService != null) {
-                    try { accessibilityService.typeText(text) } catch (_: Exception) {}
-                    "Typed '$text'."
-                } else {
+                // Use Android's InputMethodManager to type text via clipboard paste
+                try {
+                    val clipboard = appContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    val clip = android.content.ClipData.newPlainText("text", text)
+                    clipboard.setPrimaryClip(clip)
+                    // The user can paste from clipboard
+                    "I've copied '$text' to clipboard. Paste it where you need it."
+                } catch (e: Exception) {
                     "I need the Accessibility Service enabled to type. Please enable it in Settings."
                 }
             }
             "screen_read" -> {
                 if (accessibilityService != null) {
-                    val content = try { accessibilityService.readScreenContent() } catch (_: Exception) { "" }
+                    val content = try { accessibilityService.getScreenText() } catch (_: Exception) { "" }
                     if (content.isNotBlank()) "Screen content: ${content.take(500)}" else "I couldn't read anything on the screen."
                 } else {
                     "I need the Accessibility Service enabled to read the screen. Please enable it in Settings."
